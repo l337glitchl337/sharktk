@@ -16,11 +16,11 @@
 #include <sys/types.h> 
 #include <errno.h> 
 #include <sys/time.h>
+#include <getopt.h>
 
 #define BUFFER_SIZE 65536
 #define MAX_IP_LEN 16          // "255.255.255.255\0"
 #define MAX_MAC_LEN 18         // "FF:FF:FF:FF:FF:FF\0"
-#define SCAN_INTERVAL_SEC 60   // Time between full network scans
 #define ETH_HEADER_LEN 14      // Ethernet frame header size
 #define ARP_ETHERTYPE 0x0806   // EtherType for ARP packets
 #define IPV4_ETHERTYPE 0x0800  // EtherType for IPv4 packets
@@ -85,6 +85,8 @@ int num_addr;                                    // Total number of addresses in
 int count = 0;                                   // Number of discovered hosts
 volatile sig_atomic_t keep_running = 1;          // Signal-safe shutdown flag
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; // Protects shared list and count
+int scan_interval = 60;
+
 
 int main(int argc, char *argv[])
 {
@@ -93,12 +95,6 @@ int main(int argc, char *argv[])
     {
         fprintf(stderr, "Error: Cardshark requires root privileges\n");
         fprintf(stderr, "Try: sudo %s <interface>\n", argv[0]);
-        return 1;
-    }
-
-    if(argc < 2)
-    {
-        print_usage(argv[0]);
         return 1;
     }
 
@@ -115,8 +111,37 @@ int main(int argc, char *argv[])
     uint8_t my_mac[6];        // Our MAC address
     int ifindex = 0;          // Interface index for raw sockets
     bool fmac = false;        // Found MAC address
+    char *interface = NULL;
+    int opt;
 
-    char *interface = argv[1];
+
+    while((opt = getopt(argc, argv, "i:t:h")) != -1)
+    {
+        switch(opt)
+        {
+            case 'i':
+                interface = optarg;
+                break;
+            case 't':
+                scan_interval = atoi(optarg);
+                if(scan_interval < 0)
+                {
+                    fprintf(stderr, "Error: Scan interval must be postive\n");
+                    exit(EXIT_FAILURE);
+                }
+                break;
+            case 'h':
+                print_usage(argv[0]);
+                exit(EXIT_SUCCESS);
+        }
+    }
+
+    if(!interface)
+    {
+        fprintf(stderr, "Error: Interface is required\n\n");
+        print_usage(argv[0]);
+        exit(EXIT_FAILURE);
+    }
 
     struct ifaddrs *ifaddr, *ifa;
 
@@ -241,7 +266,7 @@ int main(int argc, char *argv[])
         }
         
         // Wait 60 seconds before next full scan, checking keep_running every second
-        for(int i = 0; i < SCAN_INTERVAL_SEC && keep_running; i++)
+        for(int i = 0; i < scan_interval && keep_running; i++)
         {
             sleep(1);
         }
@@ -431,7 +456,7 @@ void *listen_for_arp(void *arg)
             fflush(stdout); 
             
             pthread_mutex_lock(&mutex);
-            printf("%d/%d nodes online:\n\n", count, num_addr);
+            printf("%d/%d nodes online:\n\nScan Interval: %ds\n\n", count, num_addr, scan_interval);
             printf("%-15s %-17s %-25s\n", "IP Address", "MAC Address", "  Last Seen");
             printf("---------------------------------------------\n");
    
@@ -574,9 +599,13 @@ void freelist(void)
 void print_usage(const char *progname)
 {
     printf("Cardshark - ARP Network Scanner\n\n");
-    printf("Usage: %s <interface>\n\n", progname);
+    printf("Usage: %s -i <interface> [-t <interval>] [-h]\n", progname);
+    printf("Options:\n");
+    printf("  -i <interface>  Network interface to scan (required)\n");
+    printf("  -t <interval>   Scan interval in seconds (default: 60)\n");
+    printf("  -h              Display this help message\n");
     printf("Examples:\n");
-    printf("  sudo %s eth0\n", progname);
-    printf("  sudo %s wlan0\n\n", progname);
+    printf("  sudo %s -i eth0 -t 30\n", progname);
+    printf("  sudo %s -i wlan0\n\n", progname);
     printf("Press Ctrl+C to stop scanning and cleanup.\n");
 }

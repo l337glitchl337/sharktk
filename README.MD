@@ -37,12 +37,15 @@ sudo cp cardshark /usr/local/bin/
 ## Usage
 
 ```bash
-# Basic usage
-sudo ./cardshark <interface>
+Usage: ./cardshark -i <interface> [-t <interval>] [-h]
+Options:
+  -i <interface>  Network interface to scan (required)
+  -t <interval>   Scan interval in seconds (default: 60)
+  -h              Display this help message
+Examples:
+  sudo ./cardshark -i eth0 -t 30
+  sudo ./cardshark -i wlan0
 
-# Examples
-sudo ./cardshark eth0
-sudo ./cardshark wlan0
 ```
 
 ### Output Example
@@ -100,7 +103,7 @@ Press `Ctrl+C` to stop scanning and exit cleanly.
 ### "Error: Cardshark requires root privileges"
 Run with `sudo`:
 ```bash
-sudo ./cardshark eth0
+sudo ./cardshark -i eth0
 ```
 
 ### "Error: Interface not found"
@@ -124,7 +127,7 @@ ip addr
 - [ ] JSON/CSV export options
 - [ ] Vendor lookup (MAC OUI database)
 - [x] Timestamps for first/last seen
-- [ ] Configurable scan intervals
+- [x] Configurable scan intervals
 - [ ] IPv6 neighbor discovery support
 
 ## Project Structure
