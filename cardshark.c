@@ -27,6 +27,8 @@
 #define ARP_HW_TYPE_ETHERNET 1 // Hardware type: Ethernet
 #define ARP_OP_REQUEST 1       // ARP operation: request
 #define ARP_OP_REPLY 2         // ARP operation: reply
+#define MAX_VENDORS 60000
+#define VENDOR_FILE "manuf"
 
 // Ethernet frame header
 typedef struct EthHeader
@@ -62,10 +64,17 @@ typedef struct EthArpFrame
 typedef struct node
 {
     char *ip_address;   // Dynamically allocated IP string
-    char *mac_address;  // Dynamically allocated MAC string
+    char *mac_address;   // Dynamically allocated MAC string
+    char *vendor;
     time_t last_seen;
     struct node *next;
 } node;
+
+typedef struct vendor
+{
+    char oui[9];
+    char vendor[128];
+} vendor;
 
 // Function declarations
 void unpack_to_string(int addr, char *buffer, int bufsize);
@@ -76,6 +85,8 @@ void send_arp_requests(uint8_t *mac, int host_ip, int target_ip, int ifindex);
 void cleanup(int sig);
 void freelist(void);
 void print_usage(const char *progname);
+void load_vendors(void);
+void lookup_vendor(node *node);
 
 // Global variables (shared between main and listener thread)
 node *first = NULL;                              // Head of discovered hosts list
@@ -86,6 +97,8 @@ int count = 0;                                   // Number of discovered hosts
 volatile sig_atomic_t keep_running = 1;          // Signal-safe shutdown flag
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; // Protects shared list and count
 int scan_interval = 60;
+vendor vendors[MAX_VENDORS];
+int vendor_count = 0;
 
 
 int main(int argc, char *argv[])
@@ -97,6 +110,8 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Try: sudo %s <interface>\n", argv[0]);
         return 1;
     }
+
+    load_vendors();
 
     // Set up signal handler for graceful shutdown on Ctrl+C
     signal(SIGINT, cleanup);
@@ -457,8 +472,8 @@ void *listen_for_arp(void *arg)
             
             pthread_mutex_lock(&mutex);
             printf("%d/%d nodes online:\n\nScan Interval: %ds\n\n", count, num_addr, scan_interval);
-            printf("%-15s %-17s %-25s\n", "IP Address", "MAC Address", "  Last Seen");
-            printf("---------------------------------------------\n");
+            printf("%-15s %-17s %-12s %-25s\n", "IP Address", "MAC Address", "  Vendor", "    Last Seen");
+            printf("------------------------------------------------------------\n");
    
             for(node *current = first; current != NULL; current = current->next)
             {
@@ -466,18 +481,25 @@ void *listen_for_arp(void *arg)
                 {
                     break;
                 }
-                
+                if(!current->vendor)
+                {
+                    lookup_vendor(current);
+                }
                 time_t now = time(NULL);
                 int seconds_ago = (int)difftime(now, current->last_seen);
 
                 if(seconds_ago < 60)
-                    printf("%-15s [%-17s] [%ds ago]\n", current->ip_address, current->mac_address, seconds_ago);
+                    printf("%-15s [%-17s] [%-12s] [%ds ago]\n", current->ip_address, current->mac_address, current->vendor, seconds_ago);
                 else if(seconds_ago < 3600)
-                    printf("%-15s [%-17s] [%dm ago]\n", current->ip_address, current->mac_address, seconds_ago / 60);
+                    printf("%-15s [%-17s] [%-12s] [%dm ago]\n", current->ip_address, current->mac_address, current->vendor, seconds_ago / 60);
                 else
-                    printf("%-15s [%-17s] [%dh ago]\n", current->ip_address, current->mac_address, seconds_ago / 3600);
-                fflush(stdout);
+                    printf("%-15s [%-17s] [%-12s] [%dh ago]\n", current->ip_address, current->mac_address, current->vendor, seconds_ago / 3600);
+                
+                fflush(stdout);     
             }
+            printf("\n");
+            printf("────────────────────────────────────────────────────────────\n");
+            printf("Cardshark by l337glitchl337 | github.com/l337glitchl337/cardshark\n");
             pthread_mutex_unlock(&mutex);
         }
     }
@@ -591,6 +613,83 @@ void freelist(void)
     }
     pthread_mutex_unlock(&mutex);
     close(sock);
+}
+
+void load_vendors(void)
+{
+    FILE *fp = fopen(VENDOR_FILE, "r");
+
+    if(!fp)
+    {
+        perror("fopen");
+        return;
+    }
+
+    char line [256];
+    while(fgets(line, sizeof(line), fp) && vendor_count < MAX_VENDORS)
+    {
+        if(line[0] == '#' || line[0] == '\n')
+        {
+            continue;
+        }
+
+        char *tab1 = strchr(line, '\t');
+        if(!tab1)
+        {
+            continue;
+        }
+
+        *tab1 = '\0';
+
+        char *oui = line;
+        char *vendor = tab1 + 1;
+
+        char *tab2 = strchr(vendor, '\t');
+        if(tab2)
+        {
+            *tab2 = '\0';
+        }
+
+
+
+        char *newline = strchr(vendor, '\n');
+        if(newline)
+        {
+            *newline = '\0';
+        }
+
+        strncpy(vendors[vendor_count].oui, oui, 8);
+        vendors[vendor_count].oui[8] = '\0';
+
+        strncpy(vendors[vendor_count].vendor, vendor, 127);
+        vendors[vendor_count].vendor[127] = '\0';
+
+        vendor_count++;
+    }
+    fclose(fp);
+}
+
+void lookup_vendor(node *node)
+{
+    char oui[9];
+    strncpy(oui, node->mac_address, 8);
+    
+
+    for(int i = 0; i < vendor_count; i++)
+    {
+        if(strncmp(vendors[i].oui, oui, 8) == 0)
+        {
+            if(strchr(vendors[i].oui, '/'))
+            {
+                continue;
+            }
+            node->vendor = vendors[i].vendor;
+            return;
+        }
+    }
+
+    node->vendor = "Unknown";
+
 }
 
 /**

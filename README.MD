@@ -125,7 +125,7 @@ ip addr
 ## Roadmap
 
 - [ ] JSON/CSV export options
-- [ ] Vendor lookup (MAC OUI database)
+- [x] Vendor lookup (MAC OUI database)
 - [x] Timestamps for first/last seen
 - [x] Configurable scan intervals
 - [ ] IPv6 neighbor discovery support
