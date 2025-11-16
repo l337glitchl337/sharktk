@@ -622,6 +622,9 @@ void load_vendors(void)
     if(!fp)
     {
         perror("fopen");
+        fprintf(stderr, "Could not open vendor file, vendor lookup will not work\n");
+        fprintf(stderr, "Continuing in 5s...\n");
+        sleep(5);
         return;
     }
 
@@ -671,6 +674,12 @@ void load_vendors(void)
 
 void lookup_vendor(node *node)
 {
+    if(!vendor_count)
+    {
+        node->vendor = "Unknown";
+        return;
+    }
+    
     char oui[9];
     strncpy(oui, node->mac_address, 8);
     
