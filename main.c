@@ -170,7 +170,7 @@ int main(void)
         return 1;
     }
 
-    printf("send %d bytes\n", bytes_sent);
+    printf("sent %d bytes\n", bytes_sent);
 }
 
 void spoof_mac(uint8_t *mac)
