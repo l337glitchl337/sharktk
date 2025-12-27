@@ -7,6 +7,8 @@
 #include <linux/if_packet.h>
 #include <net/if.h>
 #include <time.h>
+#include <net/ethernet.h> 
+#include <ifaddrs.h>
 
 
 // DHCP header structure
@@ -72,6 +74,7 @@ typedef struct Packet
 
 void spoof_mac(uint8_t *mac);
 void rand_transaction_id(uint8_t *id);
+void calc_ip_checksum(Packet *p);
 
 int main(void)
 {
@@ -136,9 +139,38 @@ int main(void)
     p->dhcp.options[2] = 1;
     p->dhcp.options[3] = 255;
     memset(&p->dhcp.options[4], 0x00, 308);
+    calc_ip_checksum(p);
 
+    int sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    if(sock < 0)
+    {
+        perror("socket");
+        return 1;
+    }
 
+    char *iface = "enp34s0";
+    int ifindex = if_nametoindex(iface);
 
+    if(ifindex == 0)
+    {
+        perror("if_nametoindex");
+        return 1;
+    }
+
+    struct sockaddr_ll addr = {0};
+    addr.sll_family = AF_PACKET;
+    addr.sll_ifindex = ifindex;
+    addr.sll_halen = 6;
+    memset(addr.sll_addr, 0xff, 6);
+
+    int bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&addr, sizeof(addr));
+    if(bytes_sent < 0)
+    {
+        perror("sendto");
+        return 1;
+    }
+
+    printf("send %d bytes\n", bytes_sent);
 }
 
 void spoof_mac(uint8_t *mac)
@@ -158,4 +190,22 @@ void rand_transaction_id(uint8_t *id)
     {
         id[i] = rand() % 256;
     }
+}
+
+void calc_ip_checksum(Packet *p)
+{
+    uint32_t sum = 0;
+    uint16_t *words = (uint16_t *)&p->ip;
+
+    for(int i = 0; i < 10; i++)
+    {
+        sum += ntohs(words[i]);
+    }
+
+    while(sum >> 16)
+    {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+
+    p->ip.checksum = htons(~sum & 0xffff);
 }
