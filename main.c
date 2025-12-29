@@ -9,6 +9,9 @@
 #include <time.h>
 #include <net/ethernet.h> 
 #include <ifaddrs.h>
+#include <stdbool.h>
+
+#define BUFFER_SIZE 65535
 
 
 // DHCP header structure
@@ -78,6 +81,7 @@ void calc_ip_checksum(Packet *p);
 
 int main(void)
 {
+    printf("building DHCP packet...\n");
     Packet *p = malloc(sizeof(Packet));
     if(!p)
     {
@@ -140,6 +144,19 @@ int main(void)
     p->dhcp.options[3] = 255;
     memset(&p->dhcp.options[4], 0x00, 308);
     calc_ip_checksum(p);
+    uint32_t stranid = (p->dhcp.transaction_id[0] << 24) | (p->dhcp.transaction_id[1] << 16) | (p->dhcp.transaction_id[2] << 8) | p->dhcp.transaction_id[3];
+    printf("transaction id = %u\n", stranid);
+
+    printf("build complete, sending DHCP request for MAC %02X:%02X:%02X:%02X:%02X:%02X\n",
+            p->eth.src_mac[0],
+            p->eth.src_mac[1],
+            p->eth.src_mac[2],
+            p->eth.src_mac[3],
+            p->eth.src_mac[4],
+            p->eth.src_mac[5]
+        );
+
+    unsigned char buffer[BUFFER_SIZE];
 
     int sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if(sock < 0)
@@ -158,11 +175,12 @@ int main(void)
     }
 
     struct sockaddr_ll addr = {0};
+    socklen_t addr_len = sizeof(addr);
     addr.sll_family = AF_PACKET;
     addr.sll_ifindex = ifindex;
     addr.sll_halen = 6;
     memset(addr.sll_addr, 0xff, 6);
-
+    printf("sending packet on dev interface %s\n", iface);
     int bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&addr, sizeof(addr));
     if(bytes_sent < 0)
     {
@@ -171,6 +189,41 @@ int main(void)
     }
 
     printf("sent %d bytes\n", bytes_sent);
+    printf("waiting for response...\n");
+    
+    while(true)
+    {
+        int bytes_received = recvfrom(sock, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&addr, &addr_len);
+        if(bytes_received < 0)
+        {
+            perror("recvfrom");
+            return 1;
+        }
+        // create a new Packet object, then fill it in with the response
+        
+        Packet *response_packet = (struct Packet *)buffer;
+
+        if(response_packet->dhcp.opcode == 0x02)
+        {
+            uint32_t rtranid = (response_packet->dhcp.transaction_id[0] << 24) | (response_packet->dhcp.transaction_id[1] << 16) | (response_packet->dhcp.transaction_id[2] << 8) | response_packet->dhcp.transaction_id[3];
+            if(stranid != rtranid)
+            {
+                continue;
+            }
+            printf("received %d bytes\n", bytes_received);
+            printf("received offer from %d.%d.%d.%d, host offered IP %d.%d.%d.%d\n", 
+            response_packet->ip.src_ip[0],
+            response_packet->ip.src_ip[1],
+            response_packet->ip.src_ip[2],
+            response_packet->ip.src_ip[3],
+            response_packet->dhcp.ip_addr[0],
+            response_packet->dhcp.ip_addr[1],
+            response_packet->dhcp.ip_addr[2],
+            response_packet->dhcp.ip_addr[3]
+            );
+            break;
+        }
+    }
 }
 
 void spoof_mac(uint8_t *mac)
