@@ -221,6 +221,45 @@ int main(void)
             response_packet->dhcp.ip_addr[2],
             response_packet->dhcp.ip_addr[3]
             );
+
+            printf("accepting lease for IP...\n");
+            int offset = 0;
+
+            p->dhcp.options[offset++] = 53;
+            p->dhcp.options[offset++] = 1;
+            p->dhcp.options[offset++] = 3;
+
+            p->dhcp.options[offset++] = 50;
+            p->dhcp.options[offset++] = 4;
+            memcpy(&p->dhcp.options[offset], &response_packet->dhcp.ip_addr[0], 4);
+            offset += 4;
+
+            p->dhcp.options[offset++] = 54;
+            p->dhcp.options[offset++] = 4;
+            memcpy(&p->dhcp.options[offset], &response_packet->ip.src_ip[0], 4);
+            offset += 4;
+
+            char *hostname = "pwn3d-poolshark";
+            int len = strlen(hostname);
+            p->dhcp.options[offset++] = 12;
+            p->dhcp.options[offset++] = len;
+            memcpy(&p->dhcp.options[offset], hostname, len);
+            offset += len;
+
+            p->dhcp.options[offset++] = 255;
+
+            memset(&p->dhcp.options[offset], 0, 312 - offset);
+
+            calc_ip_checksum(p);
+
+            bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&addr, sizeof(addr));
+            if(bytes_sent < 0)
+            {
+                perror("sendto");
+                return 1;
+            }
+
+            printf("sent %d bytes...\n", bytes_sent);
             break;
         }
     }
@@ -247,6 +286,8 @@ void rand_transaction_id(uint8_t *id)
 
 void calc_ip_checksum(Packet *p)
 {
+    p->ip.checksum = 0;
+
     uint32_t sum = 0;
     uint16_t *words = (uint16_t *)&p->ip;
 
