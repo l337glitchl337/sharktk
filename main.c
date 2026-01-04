@@ -23,7 +23,7 @@
 
 #define BUFFER_SIZE 65535
 #define MAX_LINE_LEN 2048
-#define TIMEOUT 10
+#define TIMEOUT 20
 
 volatile sig_atomic_t keep_running = 1;
 // for testing
@@ -427,7 +427,7 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
             }
             continue;
         }
-        
+
         retries = 1;
 
         Packet *offer = (Packet *)buffer;
