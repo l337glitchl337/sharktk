@@ -903,6 +903,12 @@ void *renew_leases(void *arg)
             memcpy(&p->dhcp.options[offset], &current->dhcp_host, 4);
             offset += 4;
 
+            p->dhcp.options[offset++] = 61;
+            p->dhcp.options[offset++] = 7;
+            memcpy(&p->dhcp.options[offset], &current->mac, sizeof(current->mac));
+            offset += 7;
+            
+
             p->dhcp.options[offset++] = 255;
 
             calc_ip_checksum(p);
