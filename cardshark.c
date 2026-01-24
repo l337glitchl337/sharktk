@@ -723,10 +723,12 @@ void print_usage(const char *progname)
     printf("Options:\n");
     printf("  -i <interface>  Network interface to scan (required)\n");
     printf("  -t <interval>   Scan interval in seconds (default: 60)\n");
+    printf("  -e <filename>   Export results to CSV file on exit\n");
     printf("  -h              Display this help message\n");
     printf("Examples:\n");
     printf("  sudo %s -i eth0 -t 30\n", progname);
-    printf("  sudo %s -i wlan0\n\n", progname);
+    printf("  sudo %s -i wlan0 -e network_scan.csv\n", progname);
+    printf("  sudo %s -i eth0 -t 120 -e results.csv\n\n", progname);
     printf("Press Ctrl+C to stop scanning and cleanup.\n");
 }
 
