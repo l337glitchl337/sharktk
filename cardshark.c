@@ -87,6 +87,7 @@ void freelist(void);
 void print_usage(const char *progname);
 void load_vendors(void);
 void lookup_vendor(node *node);
+void export_all(node *head, char *filename);
 
 // Global variables (shared between main and listener thread)
 node *first = NULL;                              // Head of discovered hosts list
@@ -128,9 +129,11 @@ int main(int argc, char *argv[])
     bool fmac = false;        // Found MAC address
     char *interface = NULL;
     int opt;
+    char *filename;
+    bool export = false;
 
 
-    while((opt = getopt(argc, argv, "i:t:h")) != -1)
+    while((opt = getopt(argc, argv, "i:t:e:h")) != -1)
     {
         switch(opt)
         {
@@ -148,6 +151,10 @@ int main(int argc, char *argv[])
             case 'h':
                 print_usage(argv[0]);
                 exit(EXIT_SUCCESS);
+            case 'e':
+                filename = optarg;
+                export = true;
+                break;
         }
     }
 
@@ -288,7 +295,12 @@ int main(int argc, char *argv[])
     }
     
     // Clean shutdown
-    printf("\n\nCleaning up...");
+    if(export)
+    {
+        printf("\n\nExporting to file [%s]...", filename);
+        export_all(first, filename);
+    }
+    printf("Cleaning up...");
     pthread_join(thread, NULL);  // Wait for listener thread to exit
     freelist();                  // Free all discovered hosts
     printf(" [OK]\n");
@@ -716,4 +728,26 @@ void print_usage(const char *progname)
     printf("  sudo %s -i eth0 -t 30\n", progname);
     printf("  sudo %s -i wlan0\n\n", progname);
     printf("Press Ctrl+C to stop scanning and cleanup.\n");
+}
+
+void export_all(node *head, char *filename)
+{
+    FILE *fp = fopen(filename, "w");
+    if(!fp)
+    {
+        perror("fopen");
+        exit(EXIT_FAILURE);
+    }
+
+    fprintf(fp, "ip_address,mac_address,vendor\n");
+
+    node *current = head;
+
+    while(current != NULL)
+    {
+        fprintf(fp, "%s,%s,%s\n", current->ip_address, current->mac_address, current->vendor);
+        current = current->next;
+    }
+    fclose(fp);
+    printf(" [OK]\n");
 }
