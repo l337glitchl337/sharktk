@@ -389,7 +389,10 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
             if(retries > 5)
             {
                 printf("[MAIN] No offer from host in 5 retries, host is likely fully exausted\n");
-                sleep(60);
+                for(int i = 0; i < 60 && keep_running; i++)
+                {
+                    sleep(1);
+                }
                 retries = 1;
             }
             else
