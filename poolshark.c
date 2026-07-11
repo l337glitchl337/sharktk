@@ -34,6 +34,7 @@
 #define DHCP_OPTION_CLIENT_ID       61
 #define DHCP_OPTION_LEASE_TIME      51
 #define DHCP_OPTION_END             255
+#define MAGIC_TAG                   4919
 
 /* DHCP packet structure following RFC 2131 */
 typedef struct DHCP
@@ -244,7 +245,8 @@ int main(int argc, char *argv[])
 
     /* Get interface information */
     struct sockaddr_in *iaddr = (struct sockaddr_in *)&ifr.ifr_netmask;
-    memcpy(ifr.ifr_name, iface, sizeof(iface));
+    //memcpy(ifr.ifr_name, iface, sizeof(iface));
+    strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
     ifindex = if_nametoindex(ifr.ifr_name);
 
     if (ifindex < 0)
@@ -312,10 +314,8 @@ void spoof_mac(uint8_t *mac)
 
 void rand_transaction_id(uint8_t *id)
 {
-    for (int i = 0; i < 4; i++)
-    {
-        id[i] = rand() % 256;
-    }
+    uint32_t xid = htonl(((uint32_t)MAGIC_TAG << 16) | (rand() & 0x0000ffff));
+    memcpy(id, &xid, 4);
 }
 
 void calc_ip_checksum(Packet *p)
