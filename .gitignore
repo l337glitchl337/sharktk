@@ -1,0 +1,12 @@
+# Build output
+main
+*.o
+*.out
+
+# Crash dumps
+core
+core.*
+
+# Editor and OS metadata
+.vscode/
+.DS_Store
