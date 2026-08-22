@@ -1,5 +1,6 @@
 # Build output
 main
+sharkdns-bin
 *.o
 *.out
 

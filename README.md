@@ -5,13 +5,13 @@ A small UDP DNS server that answers queries with a configured IPv4 address.
 ## Build
 
 ```sh
-gcc -Wall -Wextra -pedantic -std=c11 main.c -o main
+gcc -x c -Wall -Wextra -pedantic -std=c11 sharkdns -o sharkdns-bin
 ```
 
 ## Run
 
 ```sh
-./main -p 5053 -i 192.168.0.1
+./sharkdns-bin -p 5053 -i 192.168.0.1
 ```
 
 Options:
