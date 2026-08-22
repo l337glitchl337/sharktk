@@ -10,9 +10,13 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
-#define BUF_SIZE    512
-#define PORT        53
-#define RESOLVE_IP  "8.8.8.8"
+#define BUF_SIZE                512
+#define PORT                    53
+#define RESOLVE_IP              "8.8.8.8"
+#define LINE_LENGTH_DOMAIN      1024
+#define LINE_LENGTH_IP          17
+#define LINE_LENGTH_TOTAL       2048
+#define MAX_NUM_DOMAINS         500
 
 typedef struct DNSMessage
 {
@@ -24,12 +28,19 @@ typedef struct DNSMessage
   uint16_t ar_count;
 } __attribute__((packed)) DNSMessage;
 
+typedef struct Domains
+{
+    char domain_name[1024];
+    char ip_address[17];
+} Domains;
+
 void parse_msg(uint8_t *buf, char *ip_str, DNSMessage *msg,
                const char *resolve_ip);
 uint8_t *build_reply(DNSMessage *msg, uint8_t *buf, int *reply_len,
                      const char *resolve_ip);
 void format_timestamp(char *timestamp, size_t timestamp_size);
 void print_usage(const char *program_name);
+int load_file(char *filename, Domains **domains, int *num);
 
 int main(int argc, char **argv)
 {
@@ -38,6 +49,7 @@ int main(int argc, char **argv)
     int port = PORT;
     const char *resolve_ip = RESOLVE_IP;
     int option;
+    char *filename = "test.csv";
 
     // Read the listen port and address returned in A-record answers.
     while((option = getopt(argc, argv, "p:i:")) != -1)
@@ -60,6 +72,15 @@ int main(int argc, char **argv)
                 return EXIT_FAILURE;
         }
     }
+
+    Domains *domains;
+    int number_of_domains = 0;
+    if(!load_file(filename, &domains, &number_of_domains))
+    {
+        exit(EXIT_FAILURE);
+    }
+    printf("# of domains: %d\n", number_of_domains);
+    return 0;
 
     if(inet_pton(AF_INET, resolve_ip, &(struct in_addr){0}) != 1)
     {
@@ -310,5 +331,84 @@ uint8_t *build_reply(DNSMessage *msg, uint8_t *buf, int *reply_len,
     *reply_len = offset;
 
     return reply_buf;
+}
+
+int load_file(char *filename, Domains **domains, int *num)
+{
+    // Open the CSV mapping file for reading.
+    FILE *fp = fopen(filename, "r");
+    
+    if(!fp)
+    {
+        perror("fopen");
+        return 0;
+    }
+
+    char buf[LINE_LENGTH_TOTAL];
+    int size = MAX_NUM_DOMAINS;
+    int index = 0;
+    
+    // Allocate the table through the caller's Domains pointer.
+    *domains = malloc(size * sizeof(Domains));
+    if(!*domains)
+    {
+        perror("malloc");
+        return 0;
+    }
+
+    // Read and parse one domain-to-IP mapping per line.
+    while(fgets(buf, sizeof(buf), fp) != NULL)
+    {
+        if(index == MAX_NUM_DOMAINS)
+        {
+            printf("Reached max amount of domains to load in memory\n");
+            printf("Truncating the remainder\n");
+            break;
+        }
+        buf[strcspn(buf, "\n")] = 0;
+        char *token = strtok(buf, ",");
+        int col = 1;
+
+        while(token != NULL)
+        {
+            // Store the hostname, then validate and store its IPv4 address.
+            if(col == 1)
+            {
+                strncpy((*domains)[index].domain_name, token, LINE_LENGTH_DOMAIN);
+            }
+            else if(col == 2)
+            {
+                uint32_t ip;
+                if(inet_pton(AF_INET, token, &ip) == 0)
+                {
+                    printf("Unable to parse CSV file\n");
+                    printf("Error: IP %s is invalid\n", token);
+                    return 0;
+                }
+                strncpy((*domains)[index].ip_address, token, LINE_LENGTH_IP);
+            }
+            else
+            {
+                printf("Unable to parse CSV file %s\n", filename);
+                printf("Error: Expected 2 columns\n");
+                return 0;
+            }
+
+            token = strtok(NULL, ",");
+            col += 1;
+        }
+        index += 1;
+    }
+    // The caller owns the allocated table after a successful load.
+    fclose(fp);
+
+    for(int i = 0; i < index; i++)
+    {
+        printf("Domain: %s IP: %s\n", (*domains)[i].domain_name, (*domains)[i].ip_address);
+    }
+
+    *num = index;
+
+    return 0;
 }
 
