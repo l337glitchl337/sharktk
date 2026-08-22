@@ -5,7 +5,7 @@ A small UDP DNS server that answers queries with a configured IPv4 address.
 ## Build
 
 ```sh
-gcc -x c -Wall -Wextra -pedantic -std=c11 sharkdns -o sharkdns-bin
+gcc -Wall -Wextra -pedantic -std=c11 sharkdns.c -o sharkdns-bin
 ```
 
 ## Run
