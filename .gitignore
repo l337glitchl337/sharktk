@@ -1,6 +1,7 @@
 # Build output
 main
 sharkdns-bin
+sharkdns
 test.csv
 *.o
 *.out
