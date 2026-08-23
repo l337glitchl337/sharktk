@@ -13,3 +13,6 @@ core.*
 # Editor and OS metadata
 .vscode/
 .DS_Store
+
+# Local Claude Code project config
+CLAUDE.md
