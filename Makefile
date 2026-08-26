@@ -1,21 +1,26 @@
-all: cardshark sixshark sharkbait poolshark sharkdns
+BIN := bin
 
-cardshark:
-	gcc -O2 -Wall -Wextra cardshark/cardshark.c -o cardshark/cardshark -lpthread
+all: $(BIN) cardshark sixshark sharkbait poolshark sharkdns
 
-sixshark:
-	gcc -O2 -Wall -Wextra -o sixshark/sixshark sixshark/sixshark.c
+$(BIN):
+	mkdir -p $(BIN)
 
-sharkbait:
-	gcc -O2 -Wall -Wextra sharkbait/sharkbait.c -o sharkbait/sharkbait
+cardshark: $(BIN)
+	gcc -O2 -Wall -Wextra cardshark/cardshark.c -o $(BIN)/cardshark -lpthread
 
-poolshark:
-	gcc -O2 -Wall -Wextra -o poolshark/poolshark poolshark/poolshark.c -lpthread
+sixshark: $(BIN)
+	gcc -O2 -Wall -Wextra -o $(BIN)/sixshark sixshark/sixshark.c
 
-sharkdns:
-	gcc -Wall -Wextra -pedantic -std=c11 sharkdns/sharkdns.c -o sharkdns/sharkdns
+sharkbait: $(BIN)
+	gcc -O2 -Wall -Wextra sharkbait/sharkbait.c -o $(BIN)/sharkbait
+
+poolshark: $(BIN)
+	gcc -O2 -Wall -Wextra -o $(BIN)/poolshark poolshark/poolshark.c -lpthread
+
+sharkdns: $(BIN)
+	gcc -Wall -Wextra -pedantic -std=c11 sharkdns/sharkdns.c -o $(BIN)/sharkdns
 
 clean:
-	rm -f cardshark/cardshark sixshark/sixshark sharkbait/sharkbait poolshark/poolshark sharkdns/sharkdns
+	rm -rf $(BIN)
 
 .PHONY: all clean cardshark sixshark sharkbait poolshark sharkdns
