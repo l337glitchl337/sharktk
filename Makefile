@@ -1,16 +1,16 @@
 all: cardshark sixshark sharkbait poolshark sharkdns
 
 cardshark:
-	gcc cardshark/cardshark.c -o cardshark/cardshark -lpthread
+	gcc -O2 -Wall -Wextra cardshark/cardshark.c -o cardshark/cardshark -lpthread
 
 sixshark:
-	gcc -O2 -Wall -o sixshark/sixshark sixshark/sixshark.c
+	gcc -O2 -Wall -Wextra -o sixshark/sixshark sixshark/sixshark.c
 
 sharkbait:
-	gcc sharkbait/sharkbait.c -o sharkbait/sharkbait
+	gcc -O2 -Wall -Wextra sharkbait/sharkbait.c -o sharkbait/sharkbait
 
 poolshark:
-	gcc -o poolshark/poolshark poolshark/poolshark.c -lpthread
+	gcc -O2 -Wall -Wextra -o poolshark/poolshark poolshark/poolshark.c -lpthread
 
 sharkdns:
 	gcc -Wall -Wextra -pedantic -std=c11 sharkdns/sharkdns.c -o sharkdns/sharkdns

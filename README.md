@@ -32,8 +32,9 @@ make cardshark  # build a single tool
 make clean      # remove all built binaries
 ```
 
-Each target simply invokes that tool's own original compile command in its
-subfolder — see the `Makefile` for the exact flags used per tool.
+Each target invokes `gcc -O2 -Wall -Wextra` (plus `-lpthread` where a tool
+uses threads) against that tool's single source file in its subfolder — see
+the `Makefile` for the exact flags used per tool.
 
 ### Dependencies
 
