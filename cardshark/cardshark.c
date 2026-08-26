@@ -18,6 +18,8 @@
 #include <sys/time.h>
 #include <getopt.h>
 
+#include "../common/net.h"
+
 #define BUFFER_SIZE 65536
 #define MAX_IP_LEN 16          // "255.255.255.255\0"
 #define MAX_MAC_LEN 18         // "FF:FF:FF:FF:FF:FF\0"
@@ -29,14 +31,6 @@
 #define ARP_OP_REPLY 2         // ARP operation: reply
 #define MAX_VENDORS 60000
 #define VENDOR_FILE "manuf"
-
-// Ethernet frame header
-typedef struct EthHeader
-{
-    uint8_t  dst_mac[6];     // Destination MAC address
-    uint8_t  src_mac[6];     // Source MAC address
-    uint16_t eth_type;       // EtherType (0x0806 for ARP, 0x0800 for IPv4)
-} __attribute__((packed)) EthHeader;
 
 // ARP packet structure (28 bytes total)
 typedef struct ArpPacket
@@ -331,16 +325,7 @@ void unpack_to_string(int addr, char *buffer, int bufsize)
  */
 int get_cidr(int netmask)
 {
-    int cidr = 0;
-
-    // Count set bits (Brian Kernighan's algorithm)
-    while(netmask)
-    {
-        cidr += netmask & 1;
-        netmask >>= 1;
-    }
-
-    return cidr;
+    return cidr_from_netmask((uint32_t)netmask);
 }
 
 /**
