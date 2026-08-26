@@ -1,0 +1,18 @@
+# Build output
+main
+sharkdns-bin
+sharkdns
+test.csv
+*.o
+*.out
+
+# Crash dumps
+core
+core.*
+
+# Editor and OS metadata
+.vscode/
+.DS_Store
+
+# Local Claude Code project config
+CLAUDE.md
