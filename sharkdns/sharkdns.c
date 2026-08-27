@@ -19,6 +19,7 @@
 #define LINE_LENGTH_TOTAL       2048
 #define MAX_NUM_DOMAINS         500
 #define MIN_BYTES               100
+#define MAX_BYTES               512
 
 typedef struct DNSMessage
 {
@@ -332,6 +333,11 @@ uint8_t *build_reply(DNSMessage *msg, uint8_t *buf, int *reply_len,
     for(uint8_t *pos = cursor; *pos != 0; pos++)
     {
         len++;
+        if((len+5) == MAX_BYTES)
+        {   
+            // Malformed packet, only read to 512 bytes and break
+            break;
+        }
     }
     len += 5;
 
