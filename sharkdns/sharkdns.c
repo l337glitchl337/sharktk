@@ -18,6 +18,7 @@
 #define LINE_LENGTH_IP          17
 #define LINE_LENGTH_TOTAL       2048
 #define MAX_NUM_DOMAINS         500
+#define MIN_BYTES               100
 
 typedef struct DNSMessage
 {
@@ -142,6 +143,12 @@ int main(int argc, char **argv)
         
 
         int bytes_received = recvfrom(sock, buf, BUF_SIZE, 0, (struct sockaddr *)&sender_addr, &sender_addr_len);
+
+        if(bytes_received < MIN_BYTES)
+        {
+            // Silently drop the packet.
+            continue;
+        }
 
         if(bytes_received < 0)
         {
