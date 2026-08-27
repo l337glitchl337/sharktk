@@ -13,40 +13,10 @@
 #include <sys/ioctl.h>
 #include <net/if.h>
 
+#include "../common/net.h"
+#include "../common/dhcp.h"
+
 #define BUFFER_SIZE 65535
-
-#define DHCP_OPTION_MESSAGE_TYPE    53
-#define DHCP_OPTION_REQUESTED_IP    50
-#define DHCP_OPTION_SERVER_ID       54
-#define DHCP_OPTION_HOSTNAME        12
-#define DHCP_OPTION_CLIENT_ID       61
-#define DHCP_OPTION_LEASE_TIME      51
-#define DHCP_OPTION_ROUTER          3
-#define DHCP_OPTION_SUBNET_MASK     1
-#define DHCP_OPTION_DNS             6
-#define DHCP_NAK                    6
-#define DHCP_OPTION_END             255
-#define MAGIC_TAG                   4919
-
-typedef struct DHCP
-{
-    uint8_t opcode;
-    uint8_t hw_type;
-    uint8_t hw_len;
-    uint8_t hops;
-    uint8_t transaction_id[4];
-    uint8_t sec_elapsed[2];
-    uint8_t flags[2];
-    uint8_t client_ip[4];
-    uint8_t ip_addr[4];
-    uint8_t server_ip[4];
-    uint8_t gtwy_ip[4];
-    uint8_t client_mac[16];
-    uint8_t server_name[64];
-    uint8_t boot_file[128];
-    uint8_t magic_cookie[4];
-    uint8_t options[312];
-} __attribute__((packed)) DHCP;
 
 typedef struct Packet
 {
@@ -58,7 +28,6 @@ int calc_base_ip(uint32_t *ip_addr, uint32_t *netmask, uint32_t *base_ip_out, ch
 int get_iface_netmask(int sock, const char *interface, uint32_t *netmask, char *netmask_out);
 int get_number_of_ips(uint32_t base_ip);
 int parse_dhcp_options(Packet *p);
-void add_dhcp_option(uint8_t *options, int *offset, uint8_t code, uint8_t len, const void *data);
 Packet *init_packet(Packet *client_request, uint32_t lease_ip);
 
 
@@ -367,15 +336,7 @@ int get_iface_netmask(int sock, const char *interface, uint32_t *netmask, char *
 
 int get_number_of_ips(uint32_t netmask)
 {
-    int cidr = 0;
-
-    while(netmask)
-    {
-        cidr += netmask & 1;
-        netmask >>= 1;
-
-    }
-
+    int cidr = cidr_from_netmask(netmask);
     int n = (1 << (32 - cidr)) - 2;
 
     return n;
@@ -421,17 +382,6 @@ int parse_dhcp_options(Packet *p)
     }
 }
 
-void add_dhcp_option(uint8_t *options, int *offset, uint8_t code, uint8_t len, const void *data)
-{
-    options[(*offset)++] = code;
-    options[(*offset)++] = len;
-    if(data && len > 0)
-    {
-        memcpy(&options[*offset], data, len);
-        *offset += len;
-    }
-}
-
 
 Packet *init_packet(Packet *client_request, uint32_t lease_ip)
 {
@@ -457,10 +407,7 @@ Packet *init_packet(Packet *client_request, uint32_t lease_ip)
     memcpy(p->dhcp.ip_addr, &lease_ip, sizeof(p->dhcp.ip_addr));
     memcpy(p->dhcp.client_mac, &client_request->dhcp.client_mac, sizeof(p->dhcp.client_mac));
     memcpy(&recent_xid, &client_request->dhcp.transaction_id, 4);
-    p->dhcp.magic_cookie[0] = 99;
-    p->dhcp.magic_cookie[1] = 130;
-    p->dhcp.magic_cookie[2] = 83;
-    p->dhcp.magic_cookie[3] = 99;
+    set_dhcp_magic_cookie(p->dhcp.magic_cookie);
 
     return p;
 }
