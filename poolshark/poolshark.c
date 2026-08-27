@@ -23,39 +23,12 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#include "../common/net.h"
+#include "../common/dhcp.h"
+
 #define BUFFER_SIZE 65535
 #define MAX_LINE_LEN 2048
-#define TIMEOUT 20 
-
-#define DHCP_OPTION_MESSAGE_TYPE    53
-#define DHCP_OPTION_REQUESTED_IP    50
-#define DHCP_OPTION_SERVER_ID       54
-#define DHCP_OPTION_HOSTNAME        12
-#define DHCP_OPTION_CLIENT_ID       61
-#define DHCP_OPTION_LEASE_TIME      51
-#define DHCP_OPTION_END             255
-#define MAGIC_TAG                   4919
-
-/* DHCP packet structure following RFC 2131 */
-typedef struct DHCP
-{
-    uint8_t opcode;
-    uint8_t hw_type;
-    uint8_t hw_len;
-    uint8_t hops;
-    uint8_t transaction_id[4];
-    uint8_t sec_elapsed[2];
-    uint8_t flags[2];
-    uint8_t client_ip[4];
-    uint8_t ip_addr[4];
-    uint8_t server_ip[4];
-    uint8_t gtwy_ip[4];
-    uint8_t client_mac[16];
-    uint8_t server_name[64];
-    uint8_t boot_file[128];
-    uint8_t magic_cookie[4];
-    uint8_t options[312];
-} __attribute__((packed)) DHCP;
+#define TIMEOUT 20
 
 /* IPv4 header structure following RFC 791 */
 typedef struct IP
@@ -80,14 +53,6 @@ typedef struct UDP
     uint16_t len;
     uint16_t checksum;
 } __attribute__((packed)) UDP;
-
-/* Ethernet frame header */
-typedef struct EthHeader
-{
-    uint8_t dst_mac[6];
-    uint8_t src_mac[6];
-    uint16_t eth_type;
-} __attribute__((packed)) EthHeader;
 
 /* Complete packet structure from Layer 2-7 */
 typedef struct Packet
@@ -140,16 +105,6 @@ int wait_for_response(unsigned char *buffer, uint8_t *transaction_id, int timout
 Packet *init_packet(void);
 void *renew_leases(void *arg);
 void get_lease_time(Packet *offer, Exausted *new_node);
-
-/**
- * Add a DHCP option to the options array
- * @param options - Options array to modify
- * @param offset - Current offset pointer (updated in place)
- * @param code - DHCP option code
- * @param len - Length of option data
- * @param data - Option data to copy
- */
-void add_dhcp_option(uint8_t *options, int *offset, uint8_t code, uint8_t len, const void *data);
 
 /**
  * Initialize socket address structure
@@ -343,13 +298,7 @@ void calc_ip_checksum(Packet *p)
 
 int netmask_to_cidr(unsigned long netmask)
 {
-    int cidr = 0;
-    while (netmask)
-    {
-        cidr += netmask & 1;
-        netmask >>= 1;
-    }
-    return cidr;
+    return cidr_from_netmask((uint32_t)netmask);
 }
 
 void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, const char *hostname)
@@ -590,23 +539,13 @@ void release_target(FILE *fp, Packet *p, uint8_t *iface_ip, int ifindex)
 
         Packet *offer = (struct Packet*)data;
         char dhcp_str[INET_ADDRSTRLEN];
-        int len = sizeof(offer->dhcp.options);
-        int i = 0;
 
         /* Extract DHCP server IP from options */
-        while (i < len)
+        uint8_t *server_id = find_dhcp_option(offer->dhcp.options, sizeof(offer->dhcp.options), DHCP_OPTION_SERVER_ID);
+        if (server_id)
         {
-            if (offer->dhcp.options[i] == DHCP_OPTION_END)
-            {
-                break;
-            }
-            if (offer->dhcp.options[i] == DHCP_OPTION_SERVER_ID)
-            {
-                memcpy(dhcp_host, &offer->dhcp.options[i + 2], 4);
-                inet_ntop(AF_INET, dhcp_host, dhcp_str, INET_ADDRSTRLEN);
-                break;
-            }
-            i += 2 + offer->dhcp.options[i + 1];
+            memcpy(dhcp_host, server_id, 4);
+            inet_ntop(AF_INET, dhcp_host, dhcp_str, INET_ADDRSTRLEN);
         }
 
         Targets *current = head;
@@ -796,10 +735,7 @@ Packet *init_packet(void)
     memset(p->dhcp.ip_addr, 0x00, sizeof(p->dhcp.ip_addr));
     
     /* DHCP magic cookie */
-    p->dhcp.magic_cookie[0] = 99;
-    p->dhcp.magic_cookie[1] = 130;
-    p->dhcp.magic_cookie[2] = 83;
-    p->dhcp.magic_cookie[3] = 99;
+    set_dhcp_magic_cookie(p->dhcp.magic_cookie);
     
     /* Default DHCP options */
     p->dhcp.options[0] = DHCP_OPTION_MESSAGE_TYPE;
@@ -896,33 +832,11 @@ void *renew_leases(void *arg)
 
 void get_lease_time(Packet *offer, Exausted *new_node)
 {
-    int len = sizeof(offer->dhcp.options);
-    int i = 0;
-
-    while (i < len)
+    uint8_t *lease_time = find_dhcp_option(offer->dhcp.options, sizeof(offer->dhcp.options), DHCP_OPTION_LEASE_TIME);
+    if(lease_time)
     {
-        if (offer->dhcp.options[i] == DHCP_OPTION_END)
-        {
-            break;
-        }
-        if (offer->dhcp.options[i] == DHCP_OPTION_LEASE_TIME)
-        {
-            memcpy(&new_node->lease_time, &offer->dhcp.options[i + 2], sizeof(new_node->lease_time));
-            new_node->lease_time = ntohl(new_node->lease_time);
-            break;
-        }
-        i += 2 + offer->dhcp.options[i + 1];
-    }
-}
-
-void add_dhcp_option(uint8_t *options, int *offset, uint8_t code, uint8_t len, const void *data)
-{
-    options[(*offset)++] = code;
-    options[(*offset)++] = len;
-    if(data && len > 0)
-    {
-        memcpy(&options[*offset], data, len);
-        *offset += len;
+        memcpy(&new_node->lease_time, lease_time, sizeof(new_node->lease_time));
+        new_node->lease_time = ntohl(new_node->lease_time);
     }
 }
 
