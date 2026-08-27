@@ -4,22 +4,39 @@ A monorepo consolidating the "Shark Suite" of C network security tools into
 one local repository, with the full commit history of each original repo
 preserved under its own subfolder.
 
+⚠️ **Authorized use only.** Several of these tools (sixshark, sharkbait,
+poolshark, sharkdns) are offensive/dual-use network tools intended strictly
+for testing networks you own or have explicit written permission to test.
+See [LICENSE](LICENSE) for the full authorized-use disclaimer.
+
 ## Tools
 
 | Tool | Directory | Description |
 |------|-----------|-------------|
 | [cardshark](cardshark/cardshark.c) | `cardshark/` | ARP network scanner — discovers active hosts on the local subnet, with vendor lookup and CSV export. |
-| [sixshark](sixshark/sixshark.c) | `sixshark/` | IPv6 Router Advertisement flooding tool for authorized penetration testing and research. |
-| [sharkbait](sharkbait/sharkbait.c) | `sharkbait/` | DHCP client/negotiation tool (NAK/offer handling, magic-tag detection used by poolshark). |
-| [poolshark](poolshark/poolshark.c) | `poolshark/` | DHCP starvation tool for exhausting DHCP address pools during authorized security assessments; can import cardshark CSV output for targeted release. |
+| [sixshark](sixshark/sixshark.c) | `sixshark/` | IPv6 Router Advertisement flooding tool that broadcasts forged RAs advertising a rogue prefix/router. |
+| [sharkbait](sharkbait/sharkbait.c) | `sharkbait/` | Rogue DHCP server that answers DISCOVER/REQUEST with spoofed offers (attacker-controlled gateway and DNS) and can NAK clients to force re-negotiation. |
+| [poolshark](poolshark/poolshark.c) | `poolshark/` | DHCP starvation tool for exhausting DHCP address pools, with lease renewal to hold exhausted leases and targeted release via imported cardshark CSV output. |
 | [sharkdns](sharkdns/sharkdns.c) | `sharkdns/` | UDP DNS server that answers configured domains with spoofed IPv4 addresses and forwards other queries upstream. |
 
-Each subfolder retains its original source layout unchanged. See each tool's
-own comments/usage output (`-h`) for detailed options.
+Each subfolder retains its original source layout unchanged. Run any tool
+with `-h` for its full option list.
 
-⚠️ **Authorized use only.** Several of these tools (sixshark, poolshark,
-sharkdns) are offensive/dual-use network tools intended strictly for testing
-networks you own or have explicit written permission to test.
+### Usage examples
+
+```sh
+sudo bin/cardshark -i eth0 -t 30                  # scan eth0 every 30s
+sudo bin/cardshark -i wlan0 -e scan.csv           # scan and export results to CSV
+
+sudo bin/sixshark -i eth0 -d 0 -p                 # flood eth0 with RAs, printing progress
+
+sudo bin/sharkbait -i eth0 -g 192.168.1.1 -n 8.8.8.8   # rogue DHCP server on eth0
+
+sudo bin/poolshark -i eth0                        # exhaust eth0's DHCP pool
+sudo bin/poolshark -i eth0 -f scan.csv            # exhaust, releasing targeted IPs from cardshark's CSV first
+
+sudo bin/sharkdns -f domains.csv -u 8.8.8.8       # spoof domains.csv entries, forward everything else to 8.8.8.8
+```
 
 ## Building
 
@@ -27,21 +44,30 @@ A top-level `Makefile` builds every tool without modifying any subfolder's
 source. From the repo root:
 
 ```sh
-make            # build all tools
-make cardshark  # build a single tool
-make clean      # remove all built binaries
+make            # build all tools into bin/
+make cardshark  # build a single tool into bin/
+make clean      # remove bin/
 ```
 
 Each target invokes `gcc -O2 -Wall -Wextra` (plus `-lpthread` where a tool
-uses threads) against that tool's single source file in its subfolder — see
-the `Makefile` for the exact flags used per tool.
+uses threads) against that tool's single source file in its subfolder,
+placing the resulting binary in `bin/` — see the `Makefile` for the exact
+flags used per tool.
 
 ### Dependencies
 
 - Linux, GCC
 - `pthread` (required by cardshark and poolshark)
 - Root/`sudo` privileges are required at *run* time for tools using raw
-  sockets (cardshark, sixshark, sharkbait, poolshark) — not for building.
+  sockets or privileged ports (cardshark, sixshark, sharkbait, poolshark,
+  sharkdns) — not for building.
+
+## Project status
+
+Current release: `v1.0.0` — the initial consolidation of the 5 tools into
+this repo, with no functional changes made during the merge. Ongoing bug
+fixes are tracked in this repo's Issues and developed on the `develop`
+branch before being merged and released.
 
 ## Repository structure
 
@@ -49,3 +75,7 @@ This repo was assembled from 5 previously separate repositories
 (`cardshark`, `sixshark`, `sharkbait`, `poolshark`, `sharkdns`) merged via
 `git subtree`, preserving full original commit history, authorship, and
 dates under each subfolder.
+
+## License
+
+MIT, with an authorized-use disclaimer — see [LICENSE](LICENSE).
