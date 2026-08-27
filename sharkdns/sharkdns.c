@@ -18,6 +18,8 @@
 #define LINE_LENGTH_IP          17
 #define LINE_LENGTH_TOTAL       2048
 #define MAX_NUM_DOMAINS         500
+#define MIN_BYTES               20
+#define MAX_BYTES               512
 
 typedef struct DNSMessage
 {
@@ -149,6 +151,12 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
         }
 
+        if(bytes_received < MIN_BYTES)
+        {
+            // Silently drop the packet.
+            continue;
+        }
+
         inet_ntop(AF_INET, &(sender_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
         DNSMessage *msg = (DNSMessage *)buf;
         char qname[LINE_LENGTH_DOMAIN];
@@ -242,6 +250,7 @@ void parse_msg(uint8_t *buf, DNSMessage *msg, char *ret_qname, char *ret_qtype_s
     uint16_t qclass;
     // Label index counter for label1
     int qname_index = 0;
+    bool oob = false;
 
     // If the label_len is 0, we reached the end of the label
     while(label_len != 0)
@@ -249,10 +258,21 @@ void parse_msg(uint8_t *buf, DNSMessage *msg, char *ret_qname, char *ret_qtype_s
         // Increment the position pointer and i against the label len;
         for(int i = 0; i < label_len; pos++, i++)
         {
+            if((pos - buf) > MAX_BYTES)
+            {
+                oob = true;
+                break;
+            }
+            
             // Set the label1 byte to the value of *pos
             qname[qname_index] = *pos;
             // Increment the label index for tracking between labels
             qname_index = qname_index + 1;
+        }
+
+        if(oob)
+        {
+            break;
         }
     
         // Set the new label len
@@ -321,9 +341,15 @@ uint8_t *build_reply(DNSMessage *msg, uint8_t *buf, int *reply_len,
 {
     uint8_t *cursor = buf + sizeof(DNSMessage);
     int len = 0;
+    int tqq = 5;
+    int ans = 16;
 
     for(uint8_t *pos = cursor; *pos != 0; pos++)
     {
+        if((sizeof(DNSMessage) + len + tqq + ans) >= MAX_BYTES)
+        {
+            break;
+        }
         len++;
     }
     len += 5;
