@@ -256,6 +256,10 @@ int main(int argc, char *argv[])
                 response->dhcp.options[offset++] = DHCP_OPTION_END;
             }
         }
+        else
+        {
+            continue;
+        }
 
         int sent_bytes = sendto(sock, response, sizeof(*response), 0, (struct sockaddr *)&client, len);
 
