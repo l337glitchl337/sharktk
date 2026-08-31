@@ -148,7 +148,6 @@ int main(int argc, char *argv[])
     struct sockaddr_in client;
     socklen_t len = sizeof(client);
 
-    uint32_t leased_ips[n];
     int lease_index = 0;
 
     while(keep_running)
@@ -229,8 +228,6 @@ int main(int argc, char *argv[])
                 printf("Message type: DHCPREQUEST\n");
                 printf("Sending NACK\n");
 
-                start_lease = start_lease + 1;
-
                 // Init base DHCP struct
                 response = init_packet(p, start_lease);
 
@@ -246,6 +243,7 @@ int main(int argc, char *argv[])
 
 
                 response = init_packet(p, htonl(start_lease));
+                start_lease = start_lease + 1;
 
                 int offset = 0;
                 uint32_t lease_time = htonl(86400);
@@ -256,6 +254,10 @@ int main(int argc, char *argv[])
                 add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_DNS, 4, &nameserver_ip.s_addr);
                 response->dhcp.options[offset++] = DHCP_OPTION_END;
             }
+        }
+        else
+        {
+            continue;
         }
 
         int sent_bytes = sendto(sock, response, sizeof(*response), 0, (struct sockaddr *)&client, len);

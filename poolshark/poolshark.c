@@ -90,6 +90,7 @@ int sock;
 Exausted *head = NULL;
 int ifindex = 0;
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t node_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void print_usage(const char *progname);
 void spoof_mac(uint8_t *mac);
@@ -204,7 +205,7 @@ int main(int argc, char *argv[])
     strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
     ifindex = if_nametoindex(ifr.ifr_name);
 
-    if (ifindex < 0)
+    if (ifindex == 0)
     {
         perror("if_nametoindex");
         return 1;
@@ -399,8 +400,11 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
         memcpy(&new_node->dhcp_mac, &offer->eth.src_mac, sizeof(offer->eth.src_mac));
         new_node->timestamp_inserted = time(NULL);
         get_lease_time(offer, new_node);
+
+        pthread_mutex_lock(&node_lock);
         new_node->next = *head;
         *head = new_node;
+        pthread_mutex_unlock(&node_lock);
 
         if(delay)
         {
@@ -755,15 +759,18 @@ void *renew_leases(void *arg)
     unsigned char buffer[BUFFER_SIZE];
     
     int renewal_sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-    if(!renewal_sock)
+    if(renewal_sock < 0)
     {
         perror("socket");
         exit(EXIT_FAILURE);
     }
     
+    
     while(keep_running)
     {
+        pthread_mutex_lock(&node_lock);
         Exausted *current = head;
+        pthread_mutex_unlock(&node_lock);
         rand_transaction_id(p->dhcp.transaction_id);
 
         while(current != NULL && keep_running)
@@ -822,8 +829,10 @@ void *renew_leases(void *arg)
             }
 
             printf("[RENEWAL_THREAD] Renewed %s succesfully\n", ip_str);
+            pthread_mutex_lock(&node_lock);
             current->timestamp_inserted = time(NULL);
             current = current->next;
+            pthread_mutex_unlock(&node_lock);
         }
     }
     free(p);
