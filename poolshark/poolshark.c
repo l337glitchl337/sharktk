@@ -755,7 +755,7 @@ void *renew_leases(void *arg)
     unsigned char buffer[BUFFER_SIZE];
     
     int renewal_sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-    if(!renewal_sock)
+    if(renewal_sock < 0)
     {
         perror("socket");
         exit(EXIT_FAILURE);
