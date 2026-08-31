@@ -204,7 +204,7 @@ int main(int argc, char *argv[])
     strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
     ifindex = if_nametoindex(ifr.ifr_name);
 
-    if (ifindex < 0)
+    if (ifindex == 0)
     {
         perror("if_nametoindex");
         return 1;
