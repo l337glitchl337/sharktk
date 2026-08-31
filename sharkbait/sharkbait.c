@@ -228,8 +228,6 @@ int main(int argc, char *argv[])
                 printf("Message type: DHCPREQUEST\n");
                 printf("Sending NACK\n");
 
-                start_lease = start_lease + 1;
-
                 // Init base DHCP struct
                 response = init_packet(p, start_lease);
 
@@ -245,6 +243,7 @@ int main(int argc, char *argv[])
 
 
                 response = init_packet(p, htonl(start_lease));
+                start_lease = start_lease + 1;
 
                 int offset = 0;
                 uint32_t lease_time = htonl(86400);
