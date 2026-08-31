@@ -765,10 +765,12 @@ void *renew_leases(void *arg)
         exit(EXIT_FAILURE);
     }
     
-    pthread_mutex_lock(&node_lock);
+    
     while(keep_running)
     {
+        pthread_mutex_lock(&node_lock);
         Exausted *current = head;
+        pthread_mutex_unlock(&node_lock);
         rand_transaction_id(p->dhcp.transaction_id);
 
         while(current != NULL && keep_running)
@@ -827,11 +829,12 @@ void *renew_leases(void *arg)
             }
 
             printf("[RENEWAL_THREAD] Renewed %s succesfully\n", ip_str);
+            pthread_mutex_lock(&node_lock);
             current->timestamp_inserted = time(NULL);
             current = current->next;
+            pthread_mutex_unlock(&node_lock);
         }
     }
-    pthread_mutex_unlock(&lock);
     free(p);
     return NULL;
 }
