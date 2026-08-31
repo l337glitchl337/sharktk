@@ -90,6 +90,7 @@ int sock;
 Exausted *head = NULL;
 int ifindex = 0;
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t node_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void print_usage(const char *progname);
 void spoof_mac(uint8_t *mac);
@@ -399,8 +400,11 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
         memcpy(&new_node->dhcp_mac, &offer->eth.src_mac, sizeof(offer->eth.src_mac));
         new_node->timestamp_inserted = time(NULL);
         get_lease_time(offer, new_node);
+
+        pthread_mutex_lock(&node_lock);
         new_node->next = *head;
         *head = new_node;
+        pthread_mutex_unlock(&node_lock);
 
         if(delay)
         {
@@ -761,6 +765,7 @@ void *renew_leases(void *arg)
         exit(EXIT_FAILURE);
     }
     
+    pthread_mutex_lock(&node_lock);
     while(keep_running)
     {
         Exausted *current = head;
@@ -826,6 +831,7 @@ void *renew_leases(void *arg)
             current = current->next;
         }
     }
+    pthread_mutex_unlock(&lock);
     free(p);
     return NULL;
 }
