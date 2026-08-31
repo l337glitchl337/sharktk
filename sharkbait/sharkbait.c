@@ -148,7 +148,6 @@ int main(int argc, char *argv[])
     struct sockaddr_in client;
     socklen_t len = sizeof(client);
 
-    uint32_t leased_ips[n];
     int lease_index = 0;
 
     while(keep_running)
