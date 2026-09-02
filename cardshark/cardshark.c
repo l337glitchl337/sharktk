@@ -385,6 +385,10 @@ void *listen_for_arp(void *arg)
         if(ntohs(eth->h_proto) == ARP_ETHERTYPE)
         {
             // Parse ARP packet (starts after Ethernet header)
+            if(bytes < (sizeof(struct ethhdr) + sizeof(ArpPacket)))
+            {
+                continue;
+            }
             struct ArpPacket *arp = (struct ArpPacket *)(buffer + ETH_HEADER_LEN);
 
             char sender_ip[MAX_IP_LEN];

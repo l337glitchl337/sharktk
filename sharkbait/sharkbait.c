@@ -161,6 +161,11 @@ int main(int argc, char *argv[])
             return 1;
         }
 
+        if(bytes_recv < sizeof(Packet))
+        {
+            continue;
+        }
+
         Packet *p = (Packet *)buffer;
 
         if(p->dhcp.opcode != 0x01)
@@ -193,6 +198,12 @@ int main(int argc, char *argv[])
         Packet *response = NULL;
 
         int msg_type = parse_dhcp_options(p);
+
+        if(msg_type == -1)
+        {
+            continue;
+        }
+
         client.sin_addr.s_addr = htonl(INADDR_BROADCAST);
         client.sin_port = htons(68);
 
@@ -229,7 +240,7 @@ int main(int argc, char *argv[])
                 printf("Sending NACK\n");
 
                 // Init base DHCP struct
-                response = init_packet(p, start_lease);
+                response = init_packet(p, htonl(start_lease));
 
                 // Add DHCP options for a NACK
                 int offset = 0;
@@ -382,6 +393,7 @@ int parse_dhcp_options(Packet *p)
         }
         i += 2 + p->dhcp.options[i + 1];
     }
+    return -1;
 }
 
 
