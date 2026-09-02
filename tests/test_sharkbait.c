@@ -5,7 +5,15 @@
 #include <string.h>
 
 #define main sharkbait_main_unused
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#pragma GCC diagnostic ignored "-Wreturn-type"
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
 #include "../sharkbait/sharkbait.c"
+#pragma GCC diagnostic pop
 #undef main
 
 START_TEST(test_get_number_of_ips_slash_24)

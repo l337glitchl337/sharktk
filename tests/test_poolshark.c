@@ -5,7 +5,15 @@
 #include <string.h>
 
 #define main poolshark_main_unused
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#pragma GCC diagnostic ignored "-Wreturn-type"
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
 #include "../poolshark/poolshark.c"
+#pragma GCC diagnostic pop
 #undef main
 
 START_TEST(test_spoof_mac_sets_locally_administered_bit)

@@ -6,7 +6,15 @@
 #include <stdlib.h>
 
 #define main cardshark_main_unused
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#pragma GCC diagnostic ignored "-Wreturn-type"
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
 #include "../cardshark/cardshark.c"
+#pragma GCC diagnostic pop
 #undef main
 
 START_TEST(test_unpack_to_string_zero)

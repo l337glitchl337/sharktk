@@ -17,7 +17,15 @@
 #include <string.h>
 
 #define main sharkdns_main_unused
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#pragma GCC diagnostic ignored "-Wreturn-type"
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
 #include "../sharkdns/sharkdns.c"
+#pragma GCC diagnostic pop
 #undef main
 
 /* 12-byte header + "example.com" A/IN question, 29 bytes total. */
