@@ -3,6 +3,7 @@
 #endif
 
 #include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <getopt.h>
 #include <signal.h>
@@ -161,7 +162,7 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        if(bytes_recv < sizeof(Packet))
+        if(bytes_recv < (int)(offsetof(Packet, dhcp.transaction_id) + 4))
         {
             continue;
         }

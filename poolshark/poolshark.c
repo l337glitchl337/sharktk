@@ -3,6 +3,7 @@
 #endif
 
 #include <stdio.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -683,7 +684,7 @@ int wait_for_response(unsigned char *buffer, uint8_t *transaction_id, int timeou
             return -1;
         }
 
-        if(received_bytes < sizeof(Packet))
+        if(received_bytes < (int)(offsetof(Packet, dhcp.transaction_id) + 4))
         {
             continue;
         }
