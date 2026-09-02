@@ -330,6 +330,7 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
         if (bytes_sent < 0)
         {
             perror("sendto");
+            keep_running = 0;
             return;
         }
 
@@ -374,6 +375,7 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
         if (bytes_sent < 0)
         {
             perror("sendto");
+            keep_running = 0;
             return;
         }
 
@@ -389,6 +391,7 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
         if (!new_node)
         {
             perror("malloc");
+            keep_running = 0;
             return;
         }
         count++;
@@ -590,11 +593,14 @@ void release_target(FILE *fp, Packet *p, uint8_t *iface_ip, int ifindex)
             }
 
             inet_ntop(AF_INET, current->ip_addr, ip_str, INET_ADDRSTRLEN);
+            Targets *tmp = current;
             current = current->next;
+            free(tmp);
             printf("Released [%s]\n", ip_str);
         }
         break;
     }
+
     if(keep_running)
     {
         printf("Release complete, now running exaustion...\n");
@@ -675,6 +681,11 @@ int wait_for_response(unsigned char *buffer, uint8_t *transaction_id, int timeou
         if(received_bytes < 0)
         {
             return -1;
+        }
+
+        if(received_bytes < sizeof(Packet))
+        {
+            continue;
         }
 
         Packet *new_packet = (Packet *)buffer;
@@ -762,7 +773,8 @@ void *renew_leases(void *arg)
     if(renewal_sock < 0)
     {
         perror("socket");
-        exit(EXIT_FAILURE);
+        keep_running = 0;
+        return NULL;
     }
     
     
@@ -818,7 +830,8 @@ void *renew_leases(void *arg)
             if(bytes_sent < 0)
             {
                 perror("sendto");
-                exit(EXIT_FAILURE);
+                keep_running = 0;
+                return NULL;
             }
 
             if(wait_for_response(buffer, p->dhcp.transaction_id, TIMEOUT, renewal_sock) != 1)
