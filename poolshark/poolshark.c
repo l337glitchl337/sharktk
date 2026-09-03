@@ -327,6 +327,11 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
         add_dhcp_option(p->dhcp.options, &offset, DHCP_OPTION_MESSAGE_TYPE, 1, (uint8_t[]){1});
         p->dhcp.options[offset] = DHCP_OPTION_END;
         
+        memset(p->ip.src_ip, 0, 4);
+        memset(p->dhcp.client_ip, 0, sizeof(p->dhcp.client_ip));
+        memset(p->ip.dst_ip, 0xff, sizeof(p->ip.dst_ip));
+        calc_ip_checksum(p);
+
         int bytes_sent = safe_send(sock, p, &send_addr);
         if (bytes_sent < 0)
         {
