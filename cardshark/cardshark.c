@@ -336,6 +336,7 @@ int get_cidr(int netmask)
  */
 void *listen_for_arp(void *arg)
 {
+    (void)arg;
     bool in_list = false;
     unsigned char buffer[BUFFER_SIZE];
     struct sockaddr saddr;
@@ -387,7 +388,7 @@ void *listen_for_arp(void *arg)
         if(ntohs(eth->h_proto) == ARP_ETHERTYPE)
         {
             // Parse ARP packet (starts after Ethernet header)
-            if(bytes < (sizeof(struct ethhdr) + sizeof(ArpPacket)))
+            if(bytes < (int)(sizeof(struct ethhdr) + sizeof(ArpPacket)))
             {
                 continue;
             }
@@ -595,6 +596,7 @@ void send_arp_requests(uint8_t *mac, int host_ip, int target_ip, int ifindex)
  */
 void cleanup(int sig)
 {
+    (void)sig;
     keep_running = 0;
 }
 
@@ -664,7 +666,12 @@ void load_vendors(void)
             *newline = '\0';
         }
 
+        // Truncation to 8 bytes is intentional; the next line always
+        // null-terminates, regardless of whether oui was >= 8 bytes.
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wstringop-truncation"
         strncpy(vendors[vendor_count].oui, oui, 8);
+        #pragma GCC diagnostic pop
         vendors[vendor_count].oui[8] = '\0';
 
         strncpy(vendors[vendor_count].vendor, vendor, 127);

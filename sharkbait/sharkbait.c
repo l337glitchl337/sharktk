@@ -183,12 +183,12 @@ int main(int argc, char *argv[])
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     gw = ntohl(gw);
-    uint32_t _ip = ntohl(&ip);
+    uint32_t _ip = ntohl(ip);
 
     while(keep_running)
     {   
         
-        if(memcmp(&start_lease, &gw, sizeof(uint32_t)) == 0 || memcmp(&start_lease, &_ip, sizeof(uint32_t) == 0)
+        if(memcmp(&start_lease, &gw, sizeof(uint32_t)) == 0 || memcmp(&start_lease, &_ip, sizeof(uint32_t) == 0))
         {
             printf("Skipping gw ip\n");
             start_lease += 1;
@@ -344,6 +344,7 @@ int main(int argc, char *argv[])
 
 void stop(int sig)
 {
+    (void)sig;
     keep_running = 0;
 }
 
@@ -423,7 +424,7 @@ int parse_dhcp_options(Packet *p)
 
         if(p->dhcp.options[i] == DHCP_OPTION_REQUESTED_IP)
         {
-            uint32_t requested_ip = p->dhcp.options[i + 2];
+            // uint32_t requested_ip = p->dhcp.options[i + 2];
             return 1;
         }
 

@@ -231,6 +231,7 @@ int main(int argc, char **argv)
 
 void stop(int sig)
 {
+    (void)sig;
     keep_running = 0;
 }
 

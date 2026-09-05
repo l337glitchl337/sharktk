@@ -98,9 +98,9 @@ void spoof_mac(uint8_t *mac);
 void rand_transaction_id(uint8_t *id);
 void calc_ip_checksum(Packet *p);
 int netmask_to_cidr(unsigned long netmask);
-void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, const char *hostname);
+void exaust_pool(int ifindex, Packet *p, Exausted **head, const char *hostname);
 void stop(int sig);
-void cleanup(Packet *p, Exausted *head);
+void cleanup(Packet *p);
 void release_target(FILE *fp, Packet *p, uint8_t *iface_ip, int ifindex);
 void release_on_exit(Packet *p, Exausted *head, int ifindex);
 int wait_for_response(unsigned char *buffer, uint8_t *transaction_id, int timout, int sock);
@@ -133,7 +133,6 @@ int main(int argc, char *argv[])
     char *iface = NULL;
     char *import_file = NULL;
     int opt;
-    int delay = 0;
     FILE *fp = NULL;
     const char *hostname = "pwn3d-poolshark";
     int mode = 0;
@@ -146,7 +145,7 @@ int main(int argc, char *argv[])
     }
 
     /* Parse command line arguments */
-    while ((opt = getopt(argc, argv, "i:d:f:n:h")) != -1)
+    while ((opt = getopt(argc, argv, "i:f:n:h")) != -1)
     {
         switch (opt)
         {
@@ -156,9 +155,6 @@ int main(int argc, char *argv[])
         case 'h':
             print_usage(argv[0]);
             exit(EXIT_SUCCESS);
-        case 'd':
-            delay = atoi(optarg);
-            break;
         case 'f':
             import_file = optarg;
             break;
@@ -262,11 +258,11 @@ int main(int argc, char *argv[])
             perror("pthread_create");
             return 1;
         }
-        exaust_pool(ifindex, p, &head, num_of_ips, 0, hostname);
+        exaust_pool(ifindex, p, &head, hostname);
     }
     pthread_join(thread, NULL);
     release_on_exit(p, head, ifindex);
-    cleanup(p, head);
+    cleanup(p);
 }
 
 void spoof_mac(uint8_t *mac)
@@ -313,7 +309,7 @@ int netmask_to_cidr(unsigned long netmask)
     return cidr_from_netmask((uint32_t)netmask);
 }
 
-void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, const char *hostname)
+void exaust_pool(int ifindex, Packet *p, Exausted **head, const char *hostname)
 {
     unsigned char buffer[BUFFER_SIZE];
     int len = strlen(hostname);
@@ -425,11 +421,6 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
         new_node->next = *head;
         *head = new_node;
         pthread_mutex_unlock(&node_lock);
-
-        if(delay)
-        {
-            usleep(delay);
-        }
     }
 }
 
@@ -460,7 +451,7 @@ void print_usage(const char *progname)
     printf("Press Ctrl+C to stop exhausting.\n");
 }
 
-void cleanup(Packet *p, Exausted *head)
+void cleanup(Packet *p)
 {
     printf("Cleaning up... ");
     free(p);
@@ -470,6 +461,7 @@ void cleanup(Packet *p, Exausted *head)
 
 void stop(int sig)
 {
+    (void)sig;
     keep_running = 0;
 }
 
@@ -782,6 +774,7 @@ Packet *init_packet(void)
 
 void *renew_leases(void *arg)
 {
+    (void)arg;
     Packet *p = init_packet();
     char ip_str[INET_ADDRSTRLEN];
     unsigned char buffer[BUFFER_SIZE];

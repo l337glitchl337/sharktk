@@ -366,6 +366,7 @@ int run_flood(Packet *p, int delay, const char *interface, bool progress)
 
 void stop(int sig)
 {
+    (void)sig;
     keep_running = 0;
 }
 
