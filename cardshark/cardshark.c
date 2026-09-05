@@ -98,11 +98,13 @@ int vendor_count = 0;
 
 int main(int argc, char *argv[])
 {
+    printf("Cardshark - ARP Network Scanner\n");
+
     // Require root privileges for raw sockets
     if(geteuid() != 0)
     {
         fprintf(stderr, "Error: Cardshark requires root privileges\n");
-        fprintf(stderr, "Try: sudo %s <interface>\n", argv[0]);
+        fprintf(stderr, "Try: sudo %s -i <interface>\n", argv[0]);
         return 1;
     }
 
@@ -138,7 +140,7 @@ int main(int argc, char *argv[])
                 scan_interval = atoi(optarg);
                 if(scan_interval < 0)
                 {
-                    fprintf(stderr, "Error: Scan interval must be postive\n");
+                    fprintf(stderr, "Error: Scan interval must be positive\n");
                     exit(EXIT_FAILURE);
                 }
                 break;
@@ -499,8 +501,8 @@ void *listen_for_arp(void *arg)
                 fflush(stdout);     
             }
             printf("\n");
-            printf("────────────────────────────────────────────────────────────\n");
-            printf("Cardshark by l337glitchl337 | github.com/l337glitchl337/cardshark\n");
+            printf("------------------------------------------------------------\n");
+            printf("Cardshark by l337glitchl337 | github.com/l337glitchl337/sharktk\n");
             pthread_mutex_unlock(&mutex);
         }
     }

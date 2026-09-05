@@ -127,6 +127,8 @@ int safe_send(int sock, Packet *p, struct sockaddr_ll *addr);
 
 int main(int argc, char *argv[])
 {
+    printf("Poolshark - DHCP Pool Exhaustion Tool\n");
+
     signal(SIGINT, stop);
     char *iface = NULL;
     char *import_file = NULL;
@@ -138,8 +140,8 @@ int main(int argc, char *argv[])
 
     if (getuid() != 0)
     {
-        printf("Error: Poolshark requires root priveledges\n");
-        printf("Try: sudo %s -i <interface>\n", argv[0]);
+        fprintf(stderr, "Error: Poolshark requires root privileges\n");
+        fprintf(stderr, "Try: sudo %s -i <interface>\n", argv[0]);
         return 1;
     }
 
@@ -168,7 +170,8 @@ int main(int argc, char *argv[])
 
     if (!iface)
     {
-        printf("Error: Interface is required\n");
+        fprintf(stderr, "Error: Interface is required\n\n");
+        print_usage(argv[0]);
         exit(EXIT_FAILURE);
     }
 
@@ -230,6 +233,13 @@ int main(int argc, char *argv[])
     iaddr = (struct sockaddr_in *)&ifr.ifr_addr;
     uint8_t iface_ip[4];
     memcpy(iface_ip, &iaddr->sin_addr.s_addr, 4);
+
+    char iface_ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, iface_ip, iface_ip_str, INET_ADDRSTRLEN);
+
+    printf("Interface: %s\n", iface);
+    printf("IP Address: %s\n", iface_ip_str);
+    printf("Number of IP's: %d\n", num_of_ips);
 
     /* Run targeted or normal attack mode */
     if (mode)
@@ -313,7 +323,8 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
     struct sockaddr_ll send_addr = {0};
 
     init_sock(&send_addr, ifindex, NULL);
-    printf("Exausting IP(s)...\n");
+    printf("Exhausting IP(s)...\n");
+    printf("Press Ctrl+C to stop exhausting.\n\n");
 
     while (keep_running)
     {
@@ -345,7 +356,7 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
         {
             if(retries > 5)
             {
-                printf("[MAIN] No offer from host in 5 retries, host is likely fully exausted\n");
+                printf("[MAIN] No offer from host in 5 retries, host is likely fully exhausted\n");
                 for(int i = 0; i < 60 && keep_running; i++)
                 {
                     sleep(1);
@@ -355,7 +366,7 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
             else
             {
                 retries++;
-                printf("[MAIN] No offer from host in %d(secs), retrying\n", TIMEOUT);
+                printf("[MAIN] No offer from host in %ds, retrying\n", TIMEOUT);
                 sleep(2);
             }
             continue;
@@ -388,7 +399,7 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
         /* Wait for DHCP ACK */
         if(wait_for_response(buffer, p->dhcp.transaction_id, TIMEOUT, sock) != 1)
         {
-            printf("[MAIN] No ACK from host in %d(secs), retrying...\n", TIMEOUT);
+            printf("[MAIN] No ACK from host in %ds, retrying...\n", TIMEOUT);
             continue;
         }
 
@@ -401,7 +412,7 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
             return;
         }
         count++;
-        printf("[MAIN] #%d: Exausted IP [%s]\n", count, offered_ip);
+        printf("[MAIN] #%d: Exhausted IP [%s]\n", count, offered_ip);
 
         memcpy(&new_node->ip, &offer->dhcp.ip_addr, sizeof(offer->dhcp.ip_addr));
         memcpy(&new_node->mac, &p->eth.src_mac, sizeof(p->eth.src_mac));
@@ -424,7 +435,7 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, int num, int delay, co
 
 void print_usage(const char *progname)
 {
-    printf("Poolshark - DHCP Pool Exaustion Tool\n\n");
+    printf("Poolshark - DHCP Pool Exhaustion Tool\n\n");
     printf("Usage: sudo %s -i <interface> [-d][-f][-n][-h]\n", progname);
     printf("\n");
     printf("Required:\n");
@@ -446,7 +457,7 @@ void print_usage(const char *progname)
     printf(" Normal:   Exhausts entire DHCP pool with random MAC addresses\n");
     printf(" Targeted: Uses -f to steal specific IPs first, then exhausts remainder\n");
     printf("\n");
-    printf("Press Ctrl+C to stop exaust attack.\n");
+    printf("Press Ctrl+C to stop exhausting.\n");
 }
 
 void cleanup(Packet *p, Exausted *head)
@@ -508,7 +519,7 @@ void release_target(FILE *fp, Packet *p, uint8_t *iface_ip, int ifindex)
                 }
                 else
                 {
-                    printf("Error parsing Cardshark import\n");
+                    fprintf(stderr, "Error: Failed to parse Cardshark import\n");
                     free(new_node);
                     return;
                 }
@@ -546,7 +557,7 @@ void release_target(FILE *fp, Packet *p, uint8_t *iface_ip, int ifindex)
 
         if(wait_for_response(data, p->dhcp.transaction_id, TIMEOUT, sock) != 1)
         {
-            printf("No offer from host in %d(secs), retrying\n", TIMEOUT);
+            printf("[MAIN] No offer from host in %ds, retrying\n", TIMEOUT);
             continue;
         }
 
@@ -609,13 +620,13 @@ void release_target(FILE *fp, Packet *p, uint8_t *iface_ip, int ifindex)
 
     if(keep_running)
     {
-        printf("Release complete, now running exaustion...\n");
+        printf("Release complete, now running exhaustion...\n");
     }
 }
 
 void release_on_exit(Packet *p, Exausted *head, int ifindex)
 {
-    printf("\n\nReleasing all exausted IP(s)...");
+    printf("\n\nReleasing all exhausted IP(s)...");
     Exausted *current = head;
     struct sockaddr_ll send_addr = {0};
     init_sock(&send_addr, ifindex, NULL);
@@ -842,12 +853,12 @@ void *renew_leases(void *arg)
 
             if(wait_for_response(buffer, p->dhcp.transaction_id, TIMEOUT, renewal_sock) != 1)
             {
-                printf("[RENEWAL_THREAD] No reponse from host while trying to renew %s, will try again on next iteration...\n", ip_str);
+                printf("[RENEWAL_THREAD] No response from host while trying to renew %s, will try again on next iteration...\n", ip_str);
                 current = current->next;
                 continue;
             }
 
-            printf("[RENEWAL_THREAD] Renewed %s succesfully\n", ip_str);
+            printf("[RENEWAL_THREAD] Renewed %s successfully\n", ip_str);
             pthread_mutex_lock(&node_lock);
             current->timestamp_inserted = time(NULL);
             current = current->next;
