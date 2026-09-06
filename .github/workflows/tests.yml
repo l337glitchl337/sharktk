@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libcheck-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y check pkg-config
 
       - name: Build
         run: make
