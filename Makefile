@@ -7,6 +7,7 @@ $(BIN):
 
 cardshark: $(BIN)
 	gcc -O2 -Wall -Wextra cardshark/cardshark.c -o $(BIN)/cardshark -lpthread
+	cp cardshark/manuf $(BIN)/manuf
 
 sixshark: $(BIN)
 	gcc -O2 -Wall -Wextra -o $(BIN)/sixshark sixshark/sixshark.c
