@@ -1,5 +1,7 @@
 # sharktk
 
+[![build-and-test](https://github.com/l337glitchl337/sharktk/actions/workflows/tests.yml/badge.svg)](https://github.com/l337glitchl337/sharktk/actions/workflows/tests.yml)
+
 A monorepo consolidating the "Shark Suite" of C network security tools into
 one local repository, with the full commit history of each original repo
 preserved under its own subfolder.
@@ -7,7 +9,8 @@ preserved under its own subfolder.
 ⚠️ **Authorized use only.** Several of these tools (sixshark, sharkbait,
 poolshark, sharkdns) are offensive/dual-use network tools intended strictly
 for testing networks you own or have explicit written permission to test.
-See [LICENSE](LICENSE) for the full authorized-use disclaimer.
+See [LICENSE](LICENSE) for the full authorized-use disclaimer, and
+[SECURITY.md](SECURITY.md) for how to report a vulnerability.
 
 ## Tools
 
