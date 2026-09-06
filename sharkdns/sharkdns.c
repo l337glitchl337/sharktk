@@ -63,7 +63,8 @@ int main(int argc, char **argv)
     char *filename = NULL;
     char *updns = NULL;
 
-    // Read the listen port and address returned in A-record answers.
+    // -p: listen port, -f: CSV of spoofed domain->IP mappings, -u: upstream
+    // DNS server to forward anything not found in that CSV.
     while((option = getopt(argc, argv, "p:f:u:")) != -1)
     {
         switch(option)
@@ -261,13 +262,16 @@ void format_timestamp(char *timestamp, size_t timestamp_size)
 }
 
 
+/**
+ * Extract the question name and type from a raw DNS query. QNAME is a
+ * sequence of length-prefixed labels (a 1-byte length followed by that
+ * many bytes, repeated until a 0-length byte) -- see docs/sharkdns.md for
+ * the wire format and worked example.
+ */
 void parse_msg(uint8_t *buf, DNSMessage *msg, char *ret_qname, char *ret_qtype_str)
 {
-    // Get postion of unstructured question section
-    uint8_t *cursor = buf + sizeof(DNSMessage);
-    // Set the position pointer to read the byte after the LEN byte
-    uint8_t *pos = cursor + 1;
-    // Get the label length byte
+    uint8_t *cursor = buf + sizeof(DNSMessage); // start of the question section
+    uint8_t *pos = cursor + 1;                  // first byte of label content
     uint8_t label_len = *cursor;
     uint16_t flags = ntohs(msg->flags);
     uint16_t qr = (flags >> 15);
@@ -280,14 +284,17 @@ void parse_msg(uint8_t *buf, DNSMessage *msg, char *ret_qname, char *ret_qtype_s
     char qname[LINE_LENGTH_DOMAIN];
     uint16_t qtype;
     uint16_t qclass;
-    // Label index counter for label1
     int qname_index = 0;
     bool oob = false;
 
-    // If the label_len is 0, we reached the end of the label
+    // A label_len of 0 marks the end of the name. This loop is the fix
+    // for a past critical bug (unbounded read/write on malformed input,
+    // see docs/sharkdns.md): pos is checked against the buffer's actual
+    // size on every byte, and oob breaks both the inner copy loop and
+    // this outer loop -- breaking only the inner one previously let the
+    // very next line still read past the buffer.
     while(label_len != 0)
-    {   
-        // Increment the position pointer and i against the label len;
+    {
         for(int i = 0; i < label_len; pos++, i++)
         {
             if((pos - buf) > MAX_BYTES)
@@ -295,10 +302,8 @@ void parse_msg(uint8_t *buf, DNSMessage *msg, char *ret_qname, char *ret_qtype_s
                 oob = true;
                 break;
             }
-            
-            // Set the label1 byte to the value of *pos
+
             qname[qname_index] = *pos;
-            // Increment the label index for tracking between labels
             qname_index = qname_index + 1;
         }
 
@@ -306,29 +311,25 @@ void parse_msg(uint8_t *buf, DNSMessage *msg, char *ret_qname, char *ret_qtype_s
         {
             break;
         }
-    
-        // Set the new label len
+
         label_len = *pos;
-        // If the label len isn't 0, we know we are between labels, add a '.'
-        // for the domain name.
+        // A nonzero label_len here means there's another label coming,
+        // so this is a label boundary, not the end of the name -- insert
+        // the '.' that joins them (e.g. "www" + "." + "example" + "." + "com").
         if(label_len != 0)
         {
             qname[qname_index] = '.';
             qname_index = qname_index + 1;
         }
-        // Increment the position pointer to start at the next byte
-        pos = pos + 1; 
+        pos = pos + 1;
     }
 
-    
-
-    // Copy 2 bytes from current position to qtype to extract the DNS Query Type.
+    // QTYPE and QCLASS immediately follow the terminating zero-length byte
     memcpy(&qtype, pos, 2);
     memcpy(&qclass, pos+2, 2);
     qtype = htons(qtype);
     char *qtype_str;
-    
-    // Figure out what type of query it is
+
     switch(qtype)
     {
         case 1:
@@ -362,7 +363,6 @@ void parse_msg(uint8_t *buf, DNSMessage *msg, char *ret_qname, char *ret_qtype_s
             qtype_str = "UNKNOWN";
             break;
     }
-    // Add a string terminator at the end of the string.
     qname[qname_index] = '\0';
     strncpy(ret_qname, qname, LINE_LENGTH_DOMAIN);
     strcpy(ret_qtype_str, qtype_str);
@@ -373,9 +373,14 @@ uint8_t *build_reply(DNSMessage *msg, uint8_t *buf, int *reply_len,
 {
     uint8_t *cursor = buf + sizeof(DNSMessage);
     int len = 0;
-    int tqq = 5;
-    int ans = 16;
+    int tqq = 5;  // terminating zero byte + QTYPE (2) + QCLASS (2)
+    int ans = 16; // trailing answer record this function appends below
 
+    // Bounds the question-length count so that header + question (+tqq)
+    // + the answer record (+ans) can never exceed the fixed-size
+    // reply_buf allocated below -- this budget (not just measuring the
+    // question) is what actually fixes a past critical overflow bug here.
+    // See docs/sharkdns.md for the full byte-accounting.
     for(uint8_t *pos = cursor; *pos != 0; pos++)
     {
         if((sizeof(DNSMessage) + len + tqq + ans) >= MAX_BYTES)
@@ -416,7 +421,7 @@ uint8_t *build_reply(DNSMessage *msg, uint8_t *buf, int *reply_len,
     memcpy(reply_buf, &reply, sizeof(DNSMessage));
     memcpy(reply_buf + sizeof(DNSMessage), cursor, len);
 
-    // The answer follows the question: A record for the address 8.8.8.8.
+    // The answer record follows the question: a single A record for resolve_ip.
     int offset = sizeof(DNSMessage) + len;
     uint16_t answer_type = htons(1);
     uint16_t answer_class = htons(1);

@@ -268,7 +268,9 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // Main scanning loop: send ARP requests to all IPs in subnet
+    // Main scanning loop: send ARP requests to all IPs in subnet.
+    // Note: this range includes the network and broadcast addresses
+    // (base_ip and base_ip + num_addr - 1) -- see docs/cardshark.md.
     while(keep_running)
     {
         for(int i = 0; i < num_addr; i++)
@@ -381,13 +383,14 @@ void *listen_for_arp(void *arg)
             return NULL;
         }
 
-        // Parse Ethernet header
         struct ethhdr *eth = (struct ethhdr*) buffer;
 
         // Only process ARP packets
         if(ntohs(eth->h_proto) == ARP_ETHERTYPE)
         {
-            // Parse ARP packet (starts after Ethernet header)
+            // A raw socket receives every frame on the wire, including
+            // truncated/malformed ones; reject anything too short to
+            // safely hold a full ARP packet before treating buffer as one.
             if(bytes < (int)(sizeof(struct ethhdr) + sizeof(ArpPacket)))
             {
                 continue;
@@ -397,16 +400,14 @@ void *listen_for_arp(void *arg)
             char sender_ip[MAX_IP_LEN];
             char sender_mac[MAX_MAC_LEN];
 
-            // Format IP address
-            snprintf(sender_ip, sizeof(sender_ip), "%d.%d.%d.%d", 
+            snprintf(sender_ip, sizeof(sender_ip), "%d.%d.%d.%d",
                 arp->sender_ip[0], 
                 arp->sender_ip[1], 
                 arp->sender_ip[2], 
                 arp->sender_ip[3]
             );
 
-            // Format MAC address
-            snprintf(sender_mac, sizeof(sender_mac), "%02X:%02X:%02X:%02X:%02X:%02X", 
+            snprintf(sender_mac, sizeof(sender_mac), "%02X:%02X:%02X:%02X:%02X:%02X",
                 arp->sender_mac[0],
                 arp->sender_mac[1],
                 arp->sender_mac[2],
@@ -415,7 +416,9 @@ void *listen_for_arp(void *arg)
                 arp->sender_mac[5]
             );
 
-            // Check if this host is already in our list (thread-safe)
+            // Check if this host is already in our list. The NULL check
+            // itself is safe without the lock: only this thread ever
+            // writes to `first`, so it can't change out from under us here.
             if(first != NULL)
             {
                 pthread_mutex_lock(&mutex);
@@ -520,13 +523,11 @@ void append_to_list(node **first, node **last, node *new_node)
 
     if(*first == NULL)
     {
-        // List is empty
         *first = new_node;
         *last = new_node;
     }
     else
     {
-        // Append to end
         (*last)->next = new_node;
         *last = new_node;
     }
@@ -620,6 +621,11 @@ void freelist(void)
     close(sock);
 }
 
+/**
+ * Load the IEEE OUI-to-vendor table from the local "manuf" file.
+ * File format and the OUI-range skip in lookup_vendor() are documented
+ * in docs/cardshark.md.
+ */
 void load_vendors(void)
 {
     FILE *fp = fopen(VENDOR_FILE, "r");
@@ -698,6 +704,8 @@ void lookup_vendor(node *node)
     {
         if(strncmp(vendors[i].oui, oui, 8) == 0)
         {
+            // manuf entries with a "/" are CIDR-style partial-OUI ranges,
+            // not a plain 6-hex-char OUI -- see docs/cardshark.md.
             if(strchr(vendors[i].oui, '/'))
             {
                 continue;

