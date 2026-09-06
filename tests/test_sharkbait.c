@@ -76,6 +76,44 @@ START_TEST(test_parse_dhcp_options_runs_out_without_end_returns_unknown)
 }
 END_TEST
 
+START_TEST(test_skip_reserved_lease_no_match_stays_unchanged)
+{
+    ck_assert_uint_eq(skip_reserved_lease(10, 50, 200), 10);
+}
+END_TEST
+
+START_TEST(test_skip_reserved_lease_matches_gateway)
+{
+    ck_assert_uint_eq(skip_reserved_lease(50, 50, 200), 51);
+}
+END_TEST
+
+START_TEST(test_skip_reserved_lease_matches_interface_ip)
+{
+    ck_assert_uint_eq(skip_reserved_lease(200, 50, 200), 201);
+}
+END_TEST
+
+/* Regression test for the bug this replaced: a plain `if` (checked once)
+ * would advance past the gateway and land directly on the interface IP
+ * when the two are adjacent addresses, handing that lease out anyway.
+ * skip_reserved_lease must keep advancing until clear of both. */
+START_TEST(test_skip_reserved_lease_adjacent_gateway_then_ip)
+{
+    uint32_t gw = 100;
+    uint32_t ip = 101; /* gw + 1 */
+    ck_assert_uint_eq(skip_reserved_lease(gw, gw, ip), 102);
+}
+END_TEST
+
+START_TEST(test_skip_reserved_lease_adjacent_ip_then_gateway)
+{
+    uint32_t ip = 100;
+    uint32_t gw = 101; /* ip + 1 */
+    ck_assert_uint_eq(skip_reserved_lease(ip, gw, ip), 102);
+}
+END_TEST
+
 static Suite *sharkbait_suite(void)
 {
     Suite *s = suite_create("sharkbait");
@@ -87,6 +125,11 @@ static Suite *sharkbait_suite(void)
     tcase_add_test(tc, test_parse_dhcp_options_request);
     tcase_add_test(tc, test_parse_dhcp_options_end_immediately);
     tcase_add_test(tc, test_parse_dhcp_options_runs_out_without_end_returns_unknown);
+    tcase_add_test(tc, test_skip_reserved_lease_no_match_stays_unchanged);
+    tcase_add_test(tc, test_skip_reserved_lease_matches_gateway);
+    tcase_add_test(tc, test_skip_reserved_lease_matches_interface_ip);
+    tcase_add_test(tc, test_skip_reserved_lease_adjacent_gateway_then_ip);
+    tcase_add_test(tc, test_skip_reserved_lease_adjacent_ip_then_gateway);
 
     suite_add_tcase(s, tc);
     return s;

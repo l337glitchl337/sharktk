@@ -98,11 +98,13 @@ int vendor_count = 0;
 
 int main(int argc, char *argv[])
 {
+    printf("Cardshark - ARP Network Scanner\n");
+
     // Require root privileges for raw sockets
     if(geteuid() != 0)
     {
         fprintf(stderr, "Error: Cardshark requires root privileges\n");
-        fprintf(stderr, "Try: sudo %s <interface>\n", argv[0]);
+        fprintf(stderr, "Try: sudo %s -i <interface>\n", argv[0]);
         return 1;
     }
 
@@ -138,7 +140,7 @@ int main(int argc, char *argv[])
                 scan_interval = atoi(optarg);
                 if(scan_interval < 0)
                 {
-                    fprintf(stderr, "Error: Scan interval must be postive\n");
+                    fprintf(stderr, "Error: Scan interval must be positive\n");
                     exit(EXIT_FAILURE);
                 }
                 break;
@@ -334,6 +336,7 @@ int get_cidr(int netmask)
  */
 void *listen_for_arp(void *arg)
 {
+    (void)arg;
     bool in_list = false;
     unsigned char buffer[BUFFER_SIZE];
     struct sockaddr saddr;
@@ -385,7 +388,7 @@ void *listen_for_arp(void *arg)
         if(ntohs(eth->h_proto) == ARP_ETHERTYPE)
         {
             // Parse ARP packet (starts after Ethernet header)
-            if(bytes < (sizeof(struct ethhdr) + sizeof(ArpPacket)))
+            if(bytes < (int)(sizeof(struct ethhdr) + sizeof(ArpPacket)))
             {
                 continue;
             }
@@ -499,8 +502,8 @@ void *listen_for_arp(void *arg)
                 fflush(stdout);     
             }
             printf("\n");
-            printf("────────────────────────────────────────────────────────────\n");
-            printf("Cardshark by l337glitchl337 | github.com/l337glitchl337/cardshark\n");
+            printf("------------------------------------------------------------\n");
+            printf("Cardshark by l337glitchl337 | github.com/l337glitchl337/sharktk\n");
             pthread_mutex_unlock(&mutex);
         }
     }
@@ -593,6 +596,7 @@ void send_arp_requests(uint8_t *mac, int host_ip, int target_ip, int ifindex)
  */
 void cleanup(int sig)
 {
+    (void)sig;
     keep_running = 0;
 }
 
@@ -662,7 +666,12 @@ void load_vendors(void)
             *newline = '\0';
         }
 
+        // Truncation to 8 bytes is intentional; the next line always
+        // null-terminates, regardless of whether oui was >= 8 bytes.
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wstringop-truncation"
         strncpy(vendors[vendor_count].oui, oui, 8);
+        #pragma GCC diagnostic pop
         vendors[vendor_count].oui[8] = '\0';
 
         strncpy(vendors[vendor_count].vendor, vendor, 127);
