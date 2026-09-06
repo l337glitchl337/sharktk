@@ -34,6 +34,7 @@ Packet *init_packet(Packet *client_request, uint32_t lease_ip);
 void print_usage(const char *progname);
 void stop(int sig);
 int get_if_gw(char *interface, char *gw_str, size_t gw_str_len);
+uint32_t skip_reserved_lease(uint32_t start_lease, uint32_t gw, uint32_t ip);
 
 
 volatile sig_atomic_t keep_running = 1;
@@ -188,11 +189,7 @@ int main(int argc, char *argv[])
     while(keep_running)
     {   
         
-        if(memcmp(&start_lease, &gw, sizeof(uint32_t)) == 0 || memcmp(&start_lease, &_ip, sizeof(uint32_t) == 0))
-        {
-            printf("Skipping gw ip\n");
-            start_lease += 1;
-        }
+        start_lease = skip_reserved_lease(start_lease, gw, _ip);
 
         int bytes_recv = recvfrom(sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&client, &len);
         if(bytes_recv < 0)
@@ -375,6 +372,20 @@ int calc_base_ip(uint32_t *ip_addr, uint32_t *netmask, uint32_t *base_ip_out, ch
     inet_ntop(AF_INET, &base, ip_str_out, INET_ADDRSTRLEN);
     return 0;
 
+}
+
+/**
+ * Advance start_lease past the gateway and our own interface IP, so
+ * neither is ever handed out as a lease. Loops (not a single if) so an
+ * advance past one reserved address can't land directly on the other.
+ */
+uint32_t skip_reserved_lease(uint32_t start_lease, uint32_t gw, uint32_t ip)
+{
+    while(start_lease == gw || start_lease == ip)
+    {
+        start_lease += 1;
+    }
+    return start_lease;
 }
 
 int get_iface_netmask(int sock, const char *interface, uint32_t *netmask, char *netmask_out)
