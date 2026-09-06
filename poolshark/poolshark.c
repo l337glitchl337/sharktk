@@ -117,7 +117,10 @@ void get_lease_time(Packet *offer, Exausted *new_node);
 void init_sock(struct sockaddr_ll *send_addr, int ifindex, const uint8_t *dst_mac);
 
 /**
- * Thread-safe packet send wrapper
+ * Thread-safe packet send wrapper. The global `sock` is shared between
+ * the main thread (exaust_pool/release_target) and the renewal thread;
+ * `lock` just serializes access to the shared fd, it doesn't protect any
+ * packet data (each caller builds and owns its own Packet).
  * @param sock - Socket file descriptor
  * @param p - Packet to send
  * @param addr - Destination address
@@ -144,7 +147,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Parse command line arguments */
     while ((opt = getopt(argc, argv, "i:f:n:h")) != -1)
     {
         switch (opt)
@@ -201,7 +203,6 @@ int main(int argc, char *argv[])
 
     /* Get interface information */
     struct sockaddr_in *iaddr = (struct sockaddr_in *)&ifr.ifr_netmask;
-    //memcpy(ifr.ifr_name, iface, sizeof(iface));
     strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
     ifindex = if_nametoindex(ifr.ifr_name);
 
@@ -275,6 +276,8 @@ void spoof_mac(uint8_t *mac)
     mac[0] = (mac[0] & 0xfe) | 0x02;
 }
 
+// Packs MAGIC_TAG into the top 16 bits so sharkbait can recognize and
+// ignore this tool's own DHCP traffic -- see docs/dhcp-shared.md.
 void rand_transaction_id(uint8_t *id)
 {
     uint32_t xid = htonl(((uint32_t)MAGIC_TAG << 16) | (rand() & 0x0000ffff));
@@ -427,22 +430,20 @@ void exaust_pool(int ifindex, Packet *p, Exausted **head, const char *hostname)
 void print_usage(const char *progname)
 {
     printf("Poolshark - DHCP Pool Exhaustion Tool\n\n");
-    printf("Usage: sudo %s -i <interface> [-d][-f][-n][-h]\n", progname);
+    printf("Usage: sudo %s -i <interface> [-f][-n][-h]\n", progname);
     printf("\n");
     printf("Required:\n");
     printf(" -i <interface>  Network interface to use (e.g., eth0, wlan0)\n");
     printf("\n");
     printf("Options:\n");
-    printf(" -d <delay>      Delay between requests in milliseconds (default: 0)\n");
     printf(" -f <file>       Import Cardshark CSV to steal specific IPs first\n");
     printf(" -n <hostname>   Custom hostname for DHCP requests (default: pwn3d-poolshark)\n");
     printf(" -h              Display this help message\n");
     printf("\n");
     printf("Examples:\n");
     printf(" sudo %s -i eth0\n", progname);
-    printf(" sudo %s -i wlan0 -d 1000\n", progname);
     printf(" sudo %s -i eth0 -f cardshark_scan.csv\n", progname);
-    printf(" sudo %s -i eth0 -n h4ck3ed -d 500\n", progname);
+    printf(" sudo %s -i eth0 -n h4ck3ed\n", progname);
     printf("\n");
     printf("Attack Modes:\n");
     printf(" Normal:   Exhausts entire DHCP pool with random MAC addresses\n");
@@ -692,6 +693,8 @@ int wait_for_response(unsigned char *buffer, uint8_t *transaction_id, int timeou
             return -1;
         }
 
+        // Only opcode and transaction_id are read below, so that's all
+        // this needs to guarantee is actually present in the reply.
         if(received_bytes < (int)(offsetof(Packet, dhcp.transaction_id) + 4))
         {
             continue;
@@ -725,9 +728,11 @@ Packet *init_packet(void)
     /* Initialize IP header */
     p->ip.version_ihl = 0x45;
     p->ip.tos = 0;
+    // 20 (IP header) + 8 (UDP header) + 552 (sizeof(DHCP), hardcoded rather
+    // than computed since this whole struct is packed to a fixed size).
     p->ip.total_len = htons(20 + 8 + 552);
-    p->ip.id = htons(0);
-    p->ip.flags_offset = htons(0x4000);
+    p->ip.id = htons(0); // never fragmented (DF set below), so ID is irrelevant
+    p->ip.flags_offset = htons(0x4000); // 0x4000 = Don't Fragment (DF) bit set
     p->ip.ttl = 64;
     p->ip.proto = 17;
     p->ip.checksum = 0;
@@ -748,6 +753,9 @@ Packet *init_packet(void)
     rand_transaction_id(p->dhcp.transaction_id);
     memset(p->dhcp.sec_elapsed, 0x00, sizeof(p->dhcp.sec_elapsed));
     memset(p->dhcp.flags, 0x00, sizeof(p->dhcp.flags));
+    // 0x80 = the DHCP BROADCAST flag (RFC 2131): asks the server to reply
+    // via broadcast, since our spoofed MAC has no real ARP/lease entry a
+    // server could unicast the response to.
     p->dhcp.flags[0] = 0x80;
     p->dhcp.flags[1] = 0x00;
     memset(p->dhcp.client_ip, 0x00, sizeof(p->dhcp.client_ip));
@@ -790,6 +798,11 @@ void *renew_leases(void *arg)
     
     while(keep_running)
     {
+        // node_lock only needs to guard this snapshot read and the
+        // timestamp_inserted write below -- exaust_pool() (the only other
+        // writer) only ever prepends new nodes, never mutates or frees an
+        // existing one, so walking current->next afterward without holding
+        // the lock the whole time is safe. See docs/poolshark.md.
         pthread_mutex_lock(&node_lock);
         Exausted *current = head;
         pthread_mutex_unlock(&node_lock);
@@ -797,8 +810,8 @@ void *renew_leases(void *arg)
 
         while(current != NULL && keep_running)
         {
-            usleep(50);
-            p->dhcp.flags[0] = 0x80;
+            usleep(50); // small throttle so this doesn't spin a tight loop over a long list
+            p->dhcp.flags[0] = 0x80; // DHCP BROADCAST flag, see init_packet()
             p->dhcp.flags[1] = 0x00;
             memcpy(&p->dhcp.client_mac, &current->mac, sizeof(current->mac));
             memcpy(&p->dhcp.client_ip, &current->ip, sizeof(current->ip));

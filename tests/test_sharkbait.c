@@ -114,6 +114,32 @@ START_TEST(test_skip_reserved_lease_adjacent_ip_then_gateway)
 }
 END_TEST
 
+START_TEST(test_calc_base_ip_masks_correctly)
+{
+    uint32_t ip, netmask, base;
+    inet_pton(AF_INET, "192.168.1.50", &ip);
+    inet_pton(AF_INET, "255.255.255.0", &netmask);
+    char base_str[INET_ADDRSTRLEN];
+
+    calc_base_ip(&ip, &netmask, &base, base_str);
+
+    ck_assert_str_eq(base_str, "192.168.1.0");
+}
+END_TEST
+
+START_TEST(test_calc_base_ip_slash_16)
+{
+    uint32_t ip, netmask, base;
+    inet_pton(AF_INET, "10.20.30.40", &ip);
+    inet_pton(AF_INET, "255.255.0.0", &netmask);
+    char base_str[INET_ADDRSTRLEN];
+
+    calc_base_ip(&ip, &netmask, &base, base_str);
+
+    ck_assert_str_eq(base_str, "10.20.0.0");
+}
+END_TEST
+
 static Suite *sharkbait_suite(void)
 {
     Suite *s = suite_create("sharkbait");
@@ -130,6 +156,8 @@ static Suite *sharkbait_suite(void)
     tcase_add_test(tc, test_skip_reserved_lease_matches_interface_ip);
     tcase_add_test(tc, test_skip_reserved_lease_adjacent_gateway_then_ip);
     tcase_add_test(tc, test_skip_reserved_lease_adjacent_ip_then_gateway);
+    tcase_add_test(tc, test_calc_base_ip_masks_correctly);
+    tcase_add_test(tc, test_calc_base_ip_slash_16);
 
     suite_add_tcase(s, tc);
     return s;

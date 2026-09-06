@@ -183,6 +183,9 @@ int main(int argc, char *argv[])
     struct timeval tv = {.tv_sec =1, .tv_usec = 0};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
+    // gw/_ip are host-byte-order copies for comparing against start_lease
+    // (also host order) in skip_reserved_lease(); the global `ip` stays in
+    // network order since that's what DHCP_OPTION_SERVER_ID needs below.
     gw = ntohl(gw);
     uint32_t _ip = ntohl(ip);
 
@@ -200,6 +203,9 @@ int main(int argc, char *argv[])
             }
         }
 
+        // Only the opcode and transaction_id are read before the message
+        // is identified as DHCP or discarded, so that's all this needs to
+        // guarantee is actually present -- see docs/sharkbait.md.
         if(bytes_recv < (int)(offsetof(Packet, dhcp.transaction_id) + 4))
         {
             continue;
@@ -215,6 +221,9 @@ int main(int argc, char *argv[])
         uint32_t xid;
         memcpy(&xid, &p->dhcp.transaction_id, 4);
         xid = ntohl(xid);
+        // Poolshark stamps MAGIC_TAG into the top 16 bits of every
+        // transaction ID it generates so the two tools can tell each
+        // other's traffic apart on a shared network -- see docs/dhcp-shared.md.
         if((xid >> 16) == MAGIC_TAG)
         {
             printf("Received a packet likely from Poolshark, discarding.\n");
@@ -267,19 +276,19 @@ int main(int argc, char *argv[])
         }
         else if(msg_type == 2)
         {
-
+            // recent_xid is the transaction ID of the last OFFER we sent.
+            // A REQUEST whose xid doesn't match it isn't renewing a lease
+            // we just offered (e.g. a client renewing/rebinding a lease
+            // from an earlier run) -- NACK it to force a fresh DISCOVER
+            // through us instead of letting it renew silently.
             if(memcmp(p->dhcp.transaction_id, &recent_xid, sizeof(recent_xid)) != 0 && lease_index == 0)
             {
-                // Send NACK for any DHCPREQUEST
-                // This will force victims to send a DHCPDISCOVER
 
                 printf("Message type: DHCPREQUEST\n");
                 printf("Sending NACK\n");
 
-                // Init base DHCP struct
                 response = init_packet(p, htonl(start_lease));
 
-                // Add DHCP options for a NACK
                 int offset = 0;
                 add_dhcp_option(response->dhcp.options, &offset, DHCP_OPTION_MESSAGE_TYPE, 1, (uint8_t[]){DHCP_NAK});
                 response->dhcp.options[offset++] = DHCP_OPTION_END;
@@ -415,6 +424,10 @@ int get_number_of_ips(uint32_t netmask)
     return n;
 }
 
+/**
+ * Scan a DHCP packet's options for its message type.
+ * @return 1 for DISCOVER, 2 for REQUEST, -1 for anything else/unrecognized
+ */
 int parse_dhcp_options(Packet *p)
 {
     int len = sizeof(p->dhcp.options);
@@ -435,7 +448,6 @@ int parse_dhcp_options(Packet *p)
 
         if(p->dhcp.options[i] == DHCP_OPTION_REQUESTED_IP)
         {
-            // uint32_t requested_ip = p->dhcp.options[i + 2];
             return 1;
         }
 
@@ -459,7 +471,6 @@ int parse_dhcp_options(Packet *p)
 
 Packet *init_packet(Packet *client_request, uint32_t lease_ip)
 {
-    // Allocate the packet in memory
     Packet *p = malloc(sizeof(Packet));
     if(!p)
     {
@@ -467,12 +478,10 @@ Packet *init_packet(Packet *client_request, uint32_t lease_ip)
         exit(EXIT_FAILURE);
     }
 
-    // Zero out Packet struct
     memset(p, 0, sizeof(Packet));
 
     memcpy(p->dhcp.ip_addr, &lease_ip, sizeof(p->dhcp.ip_addr));
 
-    // Build the basic DHCP structure
     p->dhcp.opcode = 0x02;
     p->dhcp.hw_type = 0x01;
     p->dhcp.hw_len = 0x06;
@@ -486,6 +495,11 @@ Packet *init_packet(Packet *client_request, uint32_t lease_ip)
     return p;
 }
 
+/**
+ * Look up the default gateway for a given interface by reading the
+ * kernel's routing table. See docs/sharkbait.md for the /proc/net/route
+ * field layout this parses.
+ */
 int get_if_gw(char *interface, char *gw_str, size_t gw_str_len)
 {
     char line[256];
@@ -518,12 +532,12 @@ int get_if_gw(char *interface, char *gw_str, size_t gw_str_len)
 
         if(ret != 11)
         {
-            continue;
+            continue; // line didn't match the expected column count/format
         }
 
         if(dest != 0)
         {
-            continue;
+            continue; // not the default route (dest 0.0.0.0)
         }
 
         if(strcmp(iface, interface) != 0)
@@ -532,7 +546,7 @@ int get_if_gw(char *interface, char *gw_str, size_t gw_str_len)
         }
 
         struct in_addr addr;
-        addr.s_addr = gateway;
+        addr.s_addr = gateway; // /proc/net/route already stores this in network byte order
         inet_ntop(AF_INET, &addr, gw_str, gw_str_len);
         fclose(fp);
         return 0;
