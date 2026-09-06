@@ -166,6 +166,63 @@ START_TEST(test_format_timestamp_produces_nonempty_string)
 }
 END_TEST
 
+START_TEST(test_load_file_parses_valid_csv)
+{
+    char path[] = "/tmp/sharkdns_test_valid_XXXXXX";
+    int fd = mkstemp(path);
+    ck_assert_int_ge(fd, 0);
+    FILE *fp = fdopen(fd, "w");
+    fputs("example.com,93.184.216.34\nfoo.test,10.0.0.1\n", fp);
+    fclose(fp);
+
+    Domains *domains = NULL;
+    int num = 0;
+    int ret = load_file(path, &domains, &num);
+
+    ck_assert_int_eq(ret, 1);
+    ck_assert_int_eq(num, 2);
+    ck_assert_str_eq(domains[0].domain_name, "example.com");
+    ck_assert_str_eq(domains[0].ip_address, "93.184.216.34");
+    ck_assert_str_eq(domains[1].domain_name, "foo.test");
+    ck_assert_str_eq(domains[1].ip_address, "10.0.0.1");
+
+    free(domains);
+    unlink(path);
+}
+END_TEST
+
+START_TEST(test_load_file_missing_file_returns_zero)
+{
+    Domains *domains = NULL;
+    int num = 0;
+    int ret = load_file("/tmp/sharkdns_test_does_not_exist_XXXXXX", &domains, &num);
+
+    ck_assert_int_eq(ret, 0);
+}
+END_TEST
+
+/* Regression guard: an invalid IPv4 address in the CSV must fail the load
+ * rather than silently storing garbage that build_reply() would later hand
+ * back to a real client. */
+START_TEST(test_load_file_invalid_ip_returns_zero)
+{
+    char path[] = "/tmp/sharkdns_test_badip_XXXXXX";
+    int fd = mkstemp(path);
+    ck_assert_int_ge(fd, 0);
+    FILE *fp = fdopen(fd, "w");
+    fputs("example.com,not-an-ip\n", fp);
+    fclose(fp);
+
+    Domains *domains = NULL;
+    int num = 0;
+    int ret = load_file(path, &domains, &num);
+
+    ck_assert_int_eq(ret, 0);
+
+    unlink(path);
+}
+END_TEST
+
 static Suite *sharkdns_suite(void)
 {
     Suite *s = suite_create("sharkdns");
@@ -177,6 +234,9 @@ static Suite *sharkdns_suite(void)
     tcase_add_test(tc, test_build_reply_valid_query);
     tcase_add_test(tc, test_build_reply_long_question_stays_in_bounds);
     tcase_add_test(tc, test_format_timestamp_produces_nonempty_string);
+    tcase_add_test(tc, test_load_file_parses_valid_csv);
+    tcase_add_test(tc, test_load_file_missing_file_returns_zero);
+    tcase_add_test(tc, test_load_file_invalid_ip_returns_zero);
 
     suite_add_tcase(s, tc);
     return s;

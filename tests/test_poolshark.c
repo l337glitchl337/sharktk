@@ -98,6 +98,45 @@ START_TEST(test_get_lease_time_extracts_value)
 }
 END_TEST
 
+START_TEST(test_init_packet_builds_valid_discover_shaped_packet)
+{
+    Packet *p = init_packet();
+    ck_assert_ptr_nonnull(p);
+
+    ck_assert_uint_eq(ntohs(p->eth.eth_type), 0x0800);
+    ck_assert_uint_eq(p->ip.version_ihl, 0x45);
+    ck_assert_uint_eq(ntohs(p->ip.total_len), 20 + 8 + 552);
+    ck_assert_uint_eq(ntohs(p->ip.flags_offset), 0x4000); /* DF bit */
+    ck_assert_uint_eq(p->ip.proto, 17);                   /* UDP */
+    ck_assert_uint_eq(ntohs(p->udp.src_port), 68);
+    ck_assert_uint_eq(ntohs(p->udp.dst_port), 67);
+    ck_assert_uint_eq(p->dhcp.flags[0], 0x80);            /* BROADCAST flag */
+    ck_assert_mem_eq(p->dhcp.client_mac, p->eth.src_mac, sizeof(p->eth.src_mac));
+
+    /* Locally-administered spoofed source MAC, same invariant spoof_mac()
+     * guarantees on its own -- see test_spoof_mac_sets_locally_administered_bit. */
+    ck_assert_uint_eq(p->eth.src_mac[0] & 0x02, 0x02);
+
+    /* calc_ip_checksum() ran as the last step: the IP header must already
+     * fold to 0xFFFF, the same invariant test_calc_ip_checksum_validates
+     * checks directly. */
+    uint32_t sum = 0;
+    uint16_t word;
+    for(size_t i = 0; i < sizeof(p->ip) / 2; i++)
+    {
+        memcpy(&word, (uint8_t *)&p->ip + (i * 2), sizeof(uint16_t));
+        sum += ntohs(word);
+    }
+    while(sum >> 16)
+    {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    ck_assert_uint_eq(sum, 0xFFFF);
+
+    free(p);
+}
+END_TEST
+
 static Suite *poolshark_suite(void)
 {
     Suite *s = suite_create("poolshark");
@@ -109,6 +148,7 @@ static Suite *poolshark_suite(void)
     tcase_add_test(tc, test_netmask_to_cidr_slash_24);
     tcase_add_test(tc, test_netmask_to_cidr_slash_8);
     tcase_add_test(tc, test_get_lease_time_extracts_value);
+    tcase_add_test(tc, test_init_packet_builds_valid_discover_shaped_packet);
 
     suite_add_tcase(s, tc);
     return s;
