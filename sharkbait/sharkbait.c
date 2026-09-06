@@ -3,6 +3,7 @@
 #endif
 
 #include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <getopt.h>
 #include <signal.h>
@@ -12,6 +13,7 @@
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
+#include <errno.h>
 
 #include "../common/net.h"
 #include "../common/dhcp.h"
@@ -29,6 +31,10 @@ int get_iface_netmask(int sock, const char *interface, uint32_t *netmask, char *
 int get_number_of_ips(uint32_t base_ip);
 int parse_dhcp_options(Packet *p);
 Packet *init_packet(Packet *client_request, uint32_t lease_ip);
+void print_usage(const char *progname);
+void stop(int sig);
+int get_if_gw(char *interface, char *gw_str, size_t gw_str_len);
+uint32_t skip_reserved_lease(uint32_t start_lease, uint32_t gw, uint32_t ip);
 
 
 volatile sig_atomic_t keep_running = 1;
@@ -37,17 +43,22 @@ uint32_t base_ip;
 uint32_t netmask;
 uint32_t ip;
 uint32_t recent_xid;
+uint32_t gw;
 struct in_addr gateway_ip, nameserver_ip;
 
 
 int main(int argc, char *argv[])
 {
+    printf("Sharkbait - Rogue DHCP Server\n\n");
 
     if(getuid() != 0)
     {
-        printf("Error: Sharkbait requires root\n");
+        fprintf(stderr, "Error: Sharkbait requires root privileges\n");
+        fprintf(stderr, "Try: sudo %s -i <interface> -g <gateway> -n <nameserver>\n", argv[0]);
         return 1;
     }
+
+    signal(SIGINT, stop);
 
     char *nameserver = NULL;
     char *gateway = NULL;
@@ -59,7 +70,7 @@ int main(int argc, char *argv[])
         switch(opt)
         {
             case 'h':
-                printf("Placeholder\n");
+                print_usage(argv[0]);
                 return 0;
             case 'i':
                 interface = optarg;
@@ -75,13 +86,15 @@ int main(int argc, char *argv[])
 
     if(!interface)
     {
-        printf("Error: -i <interface> is required.\n");
+        fprintf(stderr, "Error: -i <interface> is required.\n\n");
+        print_usage(argv[0]);
         return 1;
     }
 
     if(!nameserver || !gateway)
     {
-        printf("Error: Need both flags [-g/-n]\n");
+        fprintf(stderr, "Error: Need both flags [-g/-n]\n\n");
+        print_usage(argv[0]);
         return 1;
     }
 
@@ -113,22 +126,37 @@ int main(int argc, char *argv[])
     char iface_ip_str[INET_ADDRSTRLEN];
     char iface_netmask_str[INET_ADDRSTRLEN];
     char iface_base_ip[INET_ADDRSTRLEN];
+    char default_gw[INET_ADDRSTRLEN];
 
 
-    get_iface_ip(sock, interface, &ip, iface_ip_str);
-    get_iface_netmask(sock, interface, &netmask, iface_netmask_str);
+    if(get_iface_ip(sock, interface, &ip, iface_ip_str) != 0)
+    {
+        fprintf(stderr, "Error: Could not get IP address for interface %s\n", interface);
+        return 1;
+    }
+
+    if(get_iface_netmask(sock, interface, &netmask, iface_netmask_str) != 0)
+    {
+        fprintf(stderr, "Error: Could not get netmask for interface %s\n", interface);
+        return 1;
+    }
+    if(get_if_gw(interface, default_gw, sizeof(default_gw)) != 0)
+    {
+        fprintf(stderr, "Error: Could not get default gw for interface %s\n", interface);
+        return 1;
+    }
+
+    if(inet_pton(AF_INET, default_gw, &gw) != 1)
+    {
+        perror("inet_pton");
+        return 1;
+    }
+
     calc_base_ip(&ip, &netmask, &base_ip, iface_base_ip);
 
     int n = get_number_of_ips(netmask);
 
     inet_ntop(AF_INET, &base_ip, iface_base_ip, INET_ADDRSTRLEN);
-
-    printf("Interface: %s\n", interface);
-    printf("IP Address: %s\n", iface_ip_str);
-    printf("Netmask: %s\n", iface_netmask_str);
-    printf("Base Net: %s\n", iface_base_ip);
-    printf("Number of IP's: %d\n", n);
-
     memcpy(&start_lease, &base_ip, sizeof(uint32_t));
     start_lease = ntohl(start_lease);
     start_lease = start_lease + 1;
@@ -141,7 +169,9 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    printf("listening for DHCP requests...\n");
+    printf("Listening on interface: %s\n", interface);
+    printf("Pool size: %d\n\n", n);
+    printf("Press Ctrl+C to stop listening.\n\n");
 
     char buffer[BUFFER_SIZE];
 
@@ -150,18 +180,27 @@ int main(int argc, char *argv[])
 
     int lease_index = 0;
 
+    struct timeval tv = {.tv_sec =1, .tv_usec = 0};
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    gw = ntohl(gw);
+    uint32_t _ip = ntohl(ip);
+
     while(keep_running)
     {   
+        
+        start_lease = skip_reserved_lease(start_lease, gw, _ip);
 
         int bytes_recv = recvfrom(sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&client, &len);
-        printf("receieved data\n");
         if(bytes_recv < 0)
         {
-            perror("recvfrom");
-            return 1;
+            if(errno == EINTR)
+            {
+                continue;
+            }
         }
 
-        if(bytes_recv < sizeof(Packet))
+        if(bytes_recv < (int)(offsetof(Packet, dhcp.transaction_id) + 4))
         {
             continue;
         }
@@ -206,8 +245,6 @@ int main(int argc, char *argv[])
 
         client.sin_addr.s_addr = htonl(INADDR_BROADCAST);
         client.sin_port = htons(68);
-
-        printf("Creating offer.\n");
 
         if(msg_type == 1)
         {
@@ -282,7 +319,7 @@ int main(int argc, char *argv[])
 
         free(response);
 
-        printf("Sent %d bytes to [%02X:%02X:%02X:%02X:%02X:%02X]\n", 
+        printf("Sent %d bytes to [%02X:%02X:%02X:%02X:%02X:%02X]\n\n", 
             sent_bytes,
             p->dhcp.client_mac[0],
             p->dhcp.client_mac[1],
@@ -294,7 +331,18 @@ int main(int argc, char *argv[])
         );
 
     }
+
+    printf("\n\nCleaning up...");
+    close(sock);
+    printf(" [OK]\n");
+
     return 0;
+}
+
+void stop(int sig)
+{
+    (void)sig;
+    keep_running = 0;
 }
 
 int get_iface_ip(int sock, const char *interface, uint32_t *ip, char *ipout)
@@ -306,8 +354,7 @@ int get_iface_ip(int sock, const char *interface, uint32_t *ip, char *ipout)
 
     if(ioctl(sock, SIOCGIFADDR, &ifr) < 0)
     {
-        perror("ioctl SIOCGIFADDR");
-        return 1;
+        return -1;
     }
 
     struct sockaddr_in *sa = (struct sockaddr_in *)&ifr.ifr_addr;
@@ -327,6 +374,20 @@ int calc_base_ip(uint32_t *ip_addr, uint32_t *netmask, uint32_t *base_ip_out, ch
 
 }
 
+/**
+ * Advance start_lease past the gateway and our own interface IP, so
+ * neither is ever handed out as a lease. Loops (not a single if) so an
+ * advance past one reserved address can't land directly on the other.
+ */
+uint32_t skip_reserved_lease(uint32_t start_lease, uint32_t gw, uint32_t ip)
+{
+    while(start_lease == gw || start_lease == ip)
+    {
+        start_lease += 1;
+    }
+    return start_lease;
+}
+
 int get_iface_netmask(int sock, const char *interface, uint32_t *netmask, char *netmask_out)
 {
     struct ifreq ifr;
@@ -336,8 +397,7 @@ int get_iface_netmask(int sock, const char *interface, uint32_t *netmask, char *
 
     if(ioctl(sock, SIOCGIFNETMASK, &ifr) < 0)
     {
-        perror("ioctl SIOCGIFNETMASK");
-        return 1;
+        return -1;
     }
 
     struct sockaddr_in *sa = (struct sockaddr_in *)&ifr.ifr_netmask;
@@ -362,7 +422,7 @@ int parse_dhcp_options(Packet *p)
 
     if(len <= 0)
     {
-        printf("Error: DCHP Options should not be NULL.\n");
+        fprintf(stderr, "Error: DHCP options should not be NULL.\n");
         return -1;
     }
 
@@ -375,7 +435,7 @@ int parse_dhcp_options(Packet *p)
 
         if(p->dhcp.options[i] == DHCP_OPTION_REQUESTED_IP)
         {
-            uint32_t requested_ip = p->dhcp.options[i + 2];
+            // uint32_t requested_ip = p->dhcp.options[i + 2];
             return 1;
         }
 
@@ -424,4 +484,77 @@ Packet *init_packet(Packet *client_request, uint32_t lease_ip)
     set_dhcp_magic_cookie(p->dhcp.magic_cookie);
 
     return p;
+}
+
+int get_if_gw(char *interface, char *gw_str, size_t gw_str_len)
+{
+    char line[256];
+    char iface[IFNAMSIZ];
+    int flags, refcnt, use, metric, mtu, window, irtt;
+    unsigned long dest, gateway;
+    unsigned long mask;
+
+    const char *filename = "/proc/net/route";
+    FILE *fp = fopen(filename, "r");
+
+    if(!fp)
+    {
+        fprintf(stderr, "Error: Could not open %s\n", filename);
+        return -1;
+    }
+
+    if(!fgets(line, sizeof(line), fp))
+    {
+        fprintf(stderr, "Could not read from %s\n", filename);
+        fclose(fp);
+        return -1;
+    }
+
+    while(fgets(line, sizeof(line), fp))
+    {
+        int ret = sscanf(line, "%15s %lx %lx %X %d %d %d %lx %d %d %d",
+                          iface, &dest, &gateway, &flags, &refcnt, &use,
+                          &metric, &mask, &mtu, &window, &irtt);
+
+        if(ret != 11)
+        {
+            continue;
+        }
+
+        if(dest != 0)
+        {
+            continue;
+        }
+
+        if(strcmp(iface, interface) != 0)
+        {
+            continue;
+        }
+
+        struct in_addr addr;
+        addr.s_addr = gateway;
+        inet_ntop(AF_INET, &addr, gw_str, gw_str_len);
+        fclose(fp);
+        return 0;
+    }
+    fclose(fp);
+    return -1;
+}
+
+void print_usage(const char *progname)
+{
+    printf("Sharkbait - Rogue DHCP Server\n\n");
+    printf("Usage: sudo %s -i <interface> -g <gateway> -n <nameserver> [-h]\n", progname);
+    printf("\n");
+    printf("Required:\n");
+    printf("  -i <interface>  Network interface to listen on (e.g., eth0, wlan0)\n");
+    printf("  -g <gateway>    Gateway IP to hand out to clients\n");
+    printf("  -n <nameserver> DNS server IP to hand out to clients\n");
+    printf("\n");
+    printf("Options:\n");
+    printf("  -h              Display this help message\n");
+    printf("Examples:\n");
+    printf("  sudo %s -i eth0 -g 192.168.1.1 -n 8.8.8.8\n", progname);
+    printf("\n");
+    printf("Press Ctrl+C to stop listening.\n");
 }

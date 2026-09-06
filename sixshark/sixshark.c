@@ -142,10 +142,12 @@ volatile sig_atomic_t keep_running = 1;
 
 int main(int argc, char *argv[])
 {
+    printf("Sixshark - IPv6 RA Flooder\n");
+
     if(getuid() != 0)
     {
-        printf("Error: Sixshark requires root privileges\n");
-        printf("Try: sudo %s -i <interface>\n", argv[0]);
+        fprintf(stderr, "Error: Sixshark requires root privileges\n");
+        fprintf(stderr, "Try: sudo %s -i <interface>\n", argv[0]);
         return 1;
     }
 
@@ -171,7 +173,7 @@ int main(int argc, char *argv[])
                 delay = atoi(optarg);
                 if(delay < 0)
                 {
-                    printf("-d requires a positive integer.\n");
+                    fprintf(stderr, "Error: -d requires a positive integer.\n");
                     exit(1);
                 }
                 break;
@@ -183,7 +185,7 @@ int main(int argc, char *argv[])
 
     if(!interface)
     {
-        printf("Error: Interface is required!\n\n");
+        fprintf(stderr, "Error: Interface is required!\n\n");
         print_usage(argv[0]);
         return 1;
     }
@@ -196,7 +198,9 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    printf("Interface: %s\n", interface);
     printf("Flooding network...\n");
+    printf("Press Ctrl+C to stop flooding.\n\n");
     run_flood(p, delay, interface, progress);
     cleanup(p);
     return 0;
@@ -306,7 +310,7 @@ int run_flood(Packet *p, int delay, const char *interface, bool progress)
 
     if(!lookup_mac(interface, mac))
     {
-        printf("Error: Could not find specified interface.\n");
+        fprintf(stderr, "Error: Could not find MAC address for interface %s.\n", interface);
         close(sock);
         return 1;
     }
@@ -320,7 +324,7 @@ int run_flood(Packet *p, int delay, const char *interface, bool progress)
 
     if(dest.sin6_scope_id == 0)
     {
-        printf("Error: Could not find interface.\n");
+        fprintf(stderr, "Error: Could not find interface %s.\n", interface);
         close(sock);
         return 1;
     }
@@ -362,13 +366,15 @@ int run_flood(Packet *p, int delay, const char *interface, bool progress)
 
 void stop(int sig)
 {
+    (void)sig;
     keep_running = 0;
 }
 
 void cleanup(Packet *p)
 {
-    printf("\n\nCleaning up...\n");
+    printf("\n\nCleaning up...");
     free(p);
+    printf(" [OK]\n");
 }
 
 void print_usage(const char *progname)
@@ -384,5 +390,5 @@ void print_usage(const char *progname)
     printf(" -p         Print to screen when packet is sent\n");
     printf(" -h         Display this help message\n");
     printf("\n");
-    printf("Press Ctrl+C to stop flood.\n");
+    printf("Press Ctrl+C to stop flooding.\n");
 }

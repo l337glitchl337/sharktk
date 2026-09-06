@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <errno.h>
+#include <signal.h>
 
 #define BUF_SIZE                512
 #define PORT                    53
@@ -45,9 +46,16 @@ void print_usage(const char *program_name);
 int load_file(char *filename, Domains **domains, int *num);
 int fwd_reply(int sock, char *query, int query_len, struct sockaddr_in client_addr,
      socklen_t len, char *updns, char *ip_str, char *qname, char *qtype_str);
+void stop(int sig);
+
+volatile sig_atomic_t keep_running = 1;
 
 int main(int argc, char **argv)
 {
+    printf("Sharkdns - DNS Spoofing & Forwarding Server\n");
+
+    signal(SIGINT, stop);
+
     uint8_t *buf = malloc(BUF_SIZE);
     char ip_str[INET_ADDRSTRLEN];
     int port = PORT;
@@ -64,7 +72,7 @@ int main(int argc, char **argv)
                 port = atoi(optarg);
                 if(port < 1 || port > 65535)
                 {
-                    fprintf(stderr, "Invalid port: %s\n", optarg);
+                    fprintf(stderr, "Error: Invalid port: %s\n", optarg);
                     return EXIT_FAILURE;
                 }
                 break;
@@ -82,21 +90,21 @@ int main(int argc, char **argv)
 
     if(filename == NULL)
     {
-        printf("Missing required flag [-f]\n");
+        fprintf(stderr, "Error: Missing required flag [-f]\n\n");
         print_usage(argv[0]);
         return -1;
     }
 
     if(updns == NULL)
     {
-        printf("Missing required flag [-u]\n");
+        fprintf(stderr, "Error: Missing required flag [-u]\n\n");
         print_usage(argv[0]);
         return -1;
     }
     uint8_t updns_bin[4];
     if(inet_pton(AF_INET, updns, updns_bin) != 1)
     {
-        printf("Error: Invalid upstream DNS IP.\n");
+        fprintf(stderr, "Error: Invalid upstream DNS IP.\n");
         exit(EXIT_FAILURE);
     }
 
@@ -104,7 +112,7 @@ int main(int argc, char **argv)
     int number_of_domains = 0;
     if(load_file(filename, &domains, &number_of_domains) == 0)
     {
-        printf("Error");
+        fprintf(stderr, "Error: Failed to load domains file %s\n", filename);
         exit(EXIT_FAILURE);
     }
     
@@ -136,17 +144,22 @@ int main(int argc, char **argv)
     }
 
     printf("Listening on port %d...\n", port);
+    printf("Press Ctrl+C to stop listening.\n\n");
 
-    while(true)
+    while(keep_running)
     {
         struct sockaddr_in sender_addr;
         socklen_t sender_addr_len = sizeof(sender_addr);
-        
+
 
         int bytes_received = recvfrom(sock, buf, BUF_SIZE, 0, (struct sockaddr *)&sender_addr, &sender_addr_len);
 
         if(bytes_received < 0)
         {
+            if(errno == EINTR)
+            {
+                continue;
+            }
             perror("recvfrom");
             exit(EXIT_FAILURE);
         }
@@ -195,27 +208,46 @@ int main(int argc, char **argv)
         }
         else
         {
-            printf("Fowarding query to %s with a 5 sec timeout.\n:", updns);
+            printf("Forwarding query to %s with a 5 sec timeout...\n", updns);
             if(fwd_reply(sock, (char *)buf, bytes_received, sender_addr, sender_addr_len, updns, ip_str, qname, qtype_str) != 0)
             {
-                printf("Error!\n");
+                fprintf(stderr, "Error: Failed to forward query to %s\n", updns);
                 continue;
             }
-            printf("Fwd reply.\n");
+            printf("Forwarded reply.\n");
         }
 
-        
+
     }
 
+    printf("\n\nCleaning up...");
+    close(sock);
+    free(buf);
+    free(domains);
+    printf(" [OK]\n");
+
+    return EXIT_SUCCESS;
+}
+
+void stop(int sig)
+{
+    (void)sig;
+    keep_running = 0;
 }
 
 void print_usage(const char *program_name)
 {
-    printf("Usage: %s -f <filename> -u <ipaddress>\n", program_name);
-    fprintf(stderr, "Usage: %s [-p port]\n", program_name);
-    fprintf(stderr, "  -p port          Listen on port (default: %d)\n", PORT);
-    fprintf(stderr, "  -f Filename      Path to file for resolution spoofing.\n");
-    fprintf(stderr, "  -u Upstream DNS  IP of upstream DNS to fwd queries to.\n");
+    printf("Sharkdns - DNS Spoofing & Forwarding Server\n\n");
+    printf("Usage: %s -f <filename> -u <ipaddress> [-p port]\n", program_name);
+    printf("\n");
+    printf("Required:\n");
+    printf("  -f <filename>    Path to file for resolution spoofing.\n");
+    printf("  -u <ipaddress>   Upstream DNS IP to forward queries to.\n");
+    printf("\n");
+    printf("Options:\n");
+    printf("  -p <port>        Listen on port (default: %d)\n", PORT);
+    printf("\n");
+    printf("Press Ctrl+C to stop listening.\n");
 }
 
 void format_timestamp(char *timestamp, size_t timestamp_size)
@@ -375,7 +407,7 @@ uint8_t *build_reply(DNSMessage *msg, uint8_t *buf, int *reply_len,
     struct in_addr bin_addr;
     if(inet_pton(AF_INET, resolve_ip, &bin_addr) != 1)
     {
-        fprintf(stderr, "Invalid IPv4 address: %s\n", resolve_ip);
+        fprintf(stderr, "Error: Invalid IPv4 address: %s\n", resolve_ip);
         free(reply_buf);
         exit(EXIT_FAILURE);
     }
@@ -439,8 +471,7 @@ int load_file(char *filename, Domains **domains, int *num)
     {
         if(index == MAX_NUM_DOMAINS)
         {
-            printf("Reached max amount of domains to load in memory\n");
-            printf("Truncating the remainder\n");
+            printf("Reached max amount of domains to load in memory, truncating the remainder\n");
             break;
         }
 
@@ -460,8 +491,7 @@ int load_file(char *filename, Domains **domains, int *num)
                 uint32_t ip;
                 if(inet_pton(AF_INET, token, &ip) == 0)
                 {
-                    printf("Unable to parse CSV file\n");
-                    printf("Error: IP %s is invalid\n", token);
+                    fprintf(stderr, "Error: Unable to parse CSV file %s, IP %s is invalid\n", filename, token);
                     fclose(fp);
                     free(*domains);
                     return 0;
@@ -470,8 +500,7 @@ int load_file(char *filename, Domains **domains, int *num)
             }
             else
             {
-                printf("Unable to parse CSV file %s\n", filename);
-                printf("Error: Expected 2 columns\n");
+                fprintf(stderr, "Error: Unable to parse CSV file %s, expected 2 columns\n", filename);
                 fclose(fp);
                 free(*domains);
                 return 0;
