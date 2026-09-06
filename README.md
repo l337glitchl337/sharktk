@@ -69,10 +69,13 @@ cardshark looks for `manuf` in its current working directory at runtime.
 
 ## Project status
 
-Current release: `v1.0.0` — the initial consolidation of the 5 tools into
-this repo, with no functional changes made during the merge. Ongoing bug
-fixes are tracked in this repo's Issues and developed on the `develop`
-branch before being merged and released.
+Current release: `v1.0.7`. Since the initial consolidation of the 5 tools
+into this repo, all 14 bugs found in a full security review (3 critical,
+6 high, 5 medium) have been fixed, common protocol code was deduplicated
+into `common/`, every tool has a Check-based unit test suite (run in CI
+on every push/PR), and each tool has development documentation under
+`docs/`. Ongoing work is tracked in this repo's Issues and developed on
+the `develop` branch before being merged and released.
 
 ## Repository structure
 
